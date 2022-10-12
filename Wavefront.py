@@ -18,6 +18,7 @@ class Wavefront:
         self.x_axis = x_axis
         self.y_axis = y_axis
         self.x_array, self.y_array = np.meshgrid(x_axis, y_axis)
+        #self.coords = np.stack([])
         self.field = np.zeros((3, len(x_axis), len(y_axis)), dtype=np.cdouble)
 
     def plot_intensity(self):
