@@ -2,6 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import interpolate
 import cProfile
+from Track import Track
+from Wavefront import Wavefront
 
 c_light = 0.29979245
 
@@ -188,70 +190,6 @@ class EdgeRadSolver:
                 + 2 * omega * xf * np.cos(omega * xf)
                 - (xi**2 * omega**2 - 2) * np.sin(omega * xi)
                 - 2 * omega * xi * np.cos(omega * xi)) / omega**3.0
-
-
-class Wavefront:
-    """
-    Wavefront class containing field array
-    """
-    def __init__(self, z, omega, x_axis, y_axis):
-        """
-        :param z: Longitudinal position of wavefront
-        :param omega: Frequency of radiation
-        :param x_axis: Wavefront x_axis (e.g. np.linspace(...))
-        :param y_axis: Wavefront x_axis (e.g. np.linspace(...))
-        """
-        self.z = z
-        self.omega = omega
-        self.x_axis = x_axis
-        self.y_axis = y_axis
-        self.x_array, self.y_array = np.meshgrid(x_axis, y_axis)
-        self.field = np.zeros((3, len(x_axis), len(y_axis)), dtype=np.cdouble)
-
-    def plot_intensity(self):
-        """
-        Plots the intensity of the wavefront.
-        :return: (fig, ax)
-        """
-        intensity = (np.abs(self.field[0]) ** 2.0
-                     + np.abs(self.field[1]) ** 2.0).T
-        fig, ax = plt.subplots()
-        ax.pcolormesh(intensity)
-        return fig, ax
-
-
-class Track:
-    """
-    Class which loads a track file from SRW and provides cubic spline
-    interpolated functions for track (x, y, z) and velocity (bx, by, bz).
-    """
-
-    def __init__(self, track_file):
-        """
-        :param track_file: SRW file containing particle track
-        """
-        self.track = np.load(track_file)
-        self.time = self.track[0]
-        self.r = self.track[1:4]
-        self.beta = self.track[4:]
-
-    def plot_track(self, t_start, t_end, n_samples, axes):
-        """
-        Plot interpolated track (Uses cubic spline)
-        :param t_start: Start time (ns)
-        :param t_end: End time(ns)
-        :param n_samples: Sample points
-        :param axes: Axes to plot (e. g z-x [2, 0])
-        :return: fig, ax
-        """
-        time = np.linspace(t_start, t_end, n_samples)
-        interp0 = interpolate.InterpolatedUnivariateSpline(self.time,
-                                                           self.r[axes[0]])
-        interp1 = interpolate.InterpolatedUnivariateSpline(self.time,
-                                                           self.r[axes[1]])
-        fig, ax = plt.subplots()
-        ax.plot(interp0(time), interp1(time))
-        return fig, ax
 
 
 if __name__ == "__main__":
