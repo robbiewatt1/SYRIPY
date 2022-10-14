@@ -23,13 +23,72 @@ class EdgeRadSolver:
         self.wavefront = wavefront
         self.track = track
 
-    def solve(self, t_start, t_end, n_int):
+    def auto_res(self, sample_x=10, ds_windows=100, ds_min=3):
+        """
+        Automatically down-samples the track based on large values of
+        objective function obj = |grad(1/grad(g))|. Where g(t) is the phase
+        function.
+        :param sample_x: Number of test sample points in x
+        :param ds_windows: Number of windows in which the path is down sampled
+        :param ds_min: log10 of minimum down sampling factor
+        """
+
+        init_samples = self.track.time.shape[0]
+
+        # Calculate grad(1/ grad(phi)) at sample_x points.
+        test_index = int(self.wavefront.x_axis.shape[0] / sample_x)
+        r_obs = np.stack([self.wavefront.x_axis[::test_index],
+                          np.zeros(sample_x),
+                          np.ones(sample_x) * self.wavefront.z]).T[:, :, None] \
+                - self.track.r
+        r_norm = np.linalg.norm(r_obs, axis=1)
+        phase_samples = self.track.time[None, :] + r_norm / c_light
+        phase_grad = np.gradient(phase_samples, self.track.time, axis=1)
+        grad_inv_grad = np.gradient(1 / phase_grad, self.track.time, axis=1)
+        obj_val = np.max(np.abs(grad_inv_grad), axis=0)
+
+        # Calculate mean objective value in windows
+        window_shape = (-1, int(obj_val.shape[0] / ds_windows))
+        obj_val_windows = np.mean(obj_val.reshape(window_shape), axis=1)
+
+        # Calculate the log10 down-sampling factor for each window
+        window_ds_fact = -np.log10(obj_val_windows
+                                   / np.max(obj_val_windows))
+        # Clip down sampling at min value
+        window_ds_fact = np.clip(window_ds_fact, a_min=0, a_max=ds_min)
+        window_ds_fact = window_ds_fact
+
+        # Apply down-sampling to track values
+        # time
+        time_list = list(self.track.time.reshape(window_shape))
+        time_list = [t[::int(10**window_ds_fact[i])]
+                     for i, t in enumerate(time_list)]
+        self.track.time = np.concatenate(time_list)
+
+        # Beta
+        b_list = list(self.track.beta.reshape((3, *window_shape))
+                      .transpose(1, 2, 0))
+        beta_list = [b[::int(10**window_ds_fact[i])]
+                     for i, b in enumerate(b_list)]
+        self.track.beta = np.concatenate(beta_list).T
+
+        # Position
+        r_list = list(self.track.r.reshape((3, *window_shape))
+                      .transpose(1, 2, 0))
+        r_list = [r[::int(10**window_ds_fact[i])]
+                  for i, r in enumerate(r_list)]
+        self.track.r = np.concatenate(r_list).T
+        print("Reduction factor: ", init_samples / self.track.time.shape[0])
+
+
+    def solve(self, t_start, t_end, n_int, auto_res=True):
         """
         Main function to solve the radiation field at the wavefront.
         Interaction limits must be within time array of track
         :param t_start: Stat time of interation (ns)
         :param t_end: End time of
         :param n_int: Number of sample in integration
+        :param auto_res: Automatically reduce resolution.
         """
         # check that t_start and t_end are acceptable
         f_interp = interpolate.interp1d(self.track.time, self.track.r[2])
@@ -43,67 +102,57 @@ class EdgeRadSolver:
 
         # First solve edge parts (still to do)
 
-        # Integration sample points in time
-        t_int_points = np.linspace(t_start, t_end, n_int)
-
-        # define field
-        #field = np.zeros((3, len(self.wavefront.x_axis),
-        #                  len(self.wavefront.x_axis)), dtype=complex)
-
-        # calculate observations
-        #r_obs =
+        # Set integration points
+        start_index = np.argmin(np.abs(self.track.time - t_start))
+        end_index = np.argmin(np.abs(self.track.time - t_end))
+        skip = int((end_index - start_index) / n_int)+1
+        t_int_points = self.track.time[start_index:end_index:skip]
 
         for index in [0, 1]:
             # loop through wavefront array
             for i, xi in enumerate(self.wavefront.x_axis):
                 print(i)
                 for j, yj in enumerate(self.wavefront.y_axis):
-
                     # Form phase function and phase function inverse
                     r_obs = np.array([xi, yj, self.wavefront.z])[:, None] \
                             - self.track.r
+
                     r_norm = np.linalg.norm(r_obs, axis=0)
+
+                    # Calc phase / gradient
                     phase_samples = self.track.time + r_norm / c_light
-
-                    # Shift phase samples for numerical stability
                     phase_samples = phase_samples - phase_samples[0]
+                    phase_grad = np.gradient(phase_samples, self.track.time)
 
-                    # Phase function / derivative
+                    # Phase function
                     phase_func = interpolate.InterpolatedUnivariateSpline(
-                        self.track.time, phase_samples, k=2)
-                    phase_func_der = phase_func.derivative()
+                        self.track.time, phase_samples, k=3)
 
                     # Form integrand function (f / gp)
                     n_dir_samples = r_obs[index, :] / r_norm
                     int1_samples = (self.track.beta[index] - n_dir_samples) \
-                        / (r_norm * phase_func_der(self.track.time))
+                        / (r_norm * phase_grad)
                     int2_samples = c_light * n_dir_samples \
                         / (self.wavefront.omega * r_norm**2.0
-                           * phase_func_der(self.track.time))
+                           * phase_grad)
 
                     int1_func = interpolate.InterpolatedUnivariateSpline(
-                        phase_samples, int1_samples, k=2)
+                        phase_samples, int1_samples, k=3)
                     int2_func = interpolate.InterpolatedUnivariateSpline(
-                        phase_samples, int2_samples, k=2)
+                        phase_samples, int2_samples, k=3)
+
+
 
                     phase_int = phase_func(t_int_points)
-
-                    print(np.array([xi, yj, self.wavefront.z]))
+                    """
                     fig, ax = plt.subplots()
-                    ax.scatter(self.track.time, phase_samples)
-                    ax.set_yscale("log")
+                    ax.scatter(t_int_points, phase_int)
                     fig, ax = plt.subplots()
-                    ax.scatter(self.track.time, int1_samples, color="red")
-                    ax.plot(t_int_points, int1_func(phase_int), color="blue")
+                    ax.scatter(t_int_points, int1_func(phase_int))
                     fig, ax = plt.subplots()
-                    ax.scatter(self.track.time, int2_samples, color="red")
-                    ax.plot(t_int_points, int2_func(phase_int), color="blue")
-                    fig, ax = plt.subplots()
-                    ax.scatter(self.track.time, phase_func_der(self.track.time), color="red")
-                    ax.plot(t_int_points, phase_func_der(t_int_points), color="blue")
-                    ax.set_yscale("log")
+                    ax.scatter(t_int_points, int2_func(phase_int))
                     plt.show()
-
+                    """
                     # Perform real and imaginary integrals
                     real_part = self.filon_cos(int1_func, self.wavefront.omega,
                                                phase_int) + \
@@ -134,10 +183,12 @@ class EdgeRadSolver:
         mid_point = lower_lim + (upper_lim - lower_lim) / 2
         int_points = np.stack([lower_lim, mid_point, upper_lim]).T
 
-        # Find coefficients of quadratic approximation
+        # Find coefficients of quadratic approximation (points are shifted to
+        # make A less singular)
         f = func(int_points)
-        A = np.stack([np.ones_like(int_points), int_points,
-                      int_points ** 2.0]).transpose((1, 2, 0))
+        ini_points_shift = int_points - int_points[:, 0, None]
+        A = np.stack([np.ones_like(ini_points_shift), ini_points_shift,
+                      ini_points_shift ** 2.0]).transpose((1, 2, 0))
         coeffs = np.linalg.solve(A, f)
 
         # Calculate moments and sum
@@ -164,10 +215,12 @@ class EdgeRadSolver:
         mid_point = lower_lim + (upper_lim - lower_lim) / 2
         int_points = np.stack([lower_lim, mid_point, upper_lim]).T
 
-        # Find coefficients of quadratic approximation
+        # Find coefficients of quadratic approximation (points are shifted to
+        # make A less singular)
         f = func(int_points)
-        A = np.stack([np.ones_like(int_points), int_points,
-                      int_points**2.0]).transpose((1, 2, 0))
+        ini_points_shift = int_points - int_points[:, 0, None]
+        A = np.stack([np.ones_like(ini_points_shift), ini_points_shift,
+                      ini_points_shift**2.0]).transpose((1, 2, 0))
         coeffs = np.linalg.solve(A, f)
 
         # Calculate moments and sum
@@ -257,18 +310,15 @@ if __name__ == "__main__":
     track.plot_track(0, 9, 1000, [2, 0])
     plt.show()
     wavefnt = Wavefront(1.7526625849289021, 3.77e6,
-                        np.linspace(-0.02, 0.02, 3),
-                        np.linspace(-0.02, 0.02, 3))
+                        np.linspace(-0.01, 0.01, 100),
+                        np.linspace(-0.01, 0.01, 100))
 
     slvr = EdgeRadSolver(wavefnt, track)
+    #slvr.auto_res(1)
 
 
-    #func = lambda x : x**2.0
-    #x_sample = np.linspace(0, 1, 50)
-    #slvr.filon_sin(func, 1000, x_sample)
-    #print(track.time[0], track.time[-1])
     tic = time.perf_counter()
-    slvr.solve(0, 9, 50000)
+    slvr.solve(0, 9, 1000)
     toc = time.perf_counter()
     print(f"Downloaded the tutorial in {toc - tic:0.4f} seconds")
     wavefnt.plot_intensity()
