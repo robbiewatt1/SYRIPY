@@ -5,6 +5,7 @@ import cProfile
 from Track import Track
 from Wavefront import Wavefront
 import time
+import os
 
 c_light = 0.29979245
 
@@ -23,7 +24,7 @@ class EdgeRadSolver:
         self.wavefront = wavefront
         self.track = track
 
-    def auto_res(self, sample_x=10, ds_windows=100, ds_min=3):
+    def auto_res(self, sample_x=10, ds_windows=10, ds_min=3):
         """
         Automatically down-samples the track based on large values of
         objective function obj = |grad(1/grad(g))|. Where g(t) is the phase
@@ -100,7 +101,6 @@ class EdgeRadSolver:
             raise Exception(f"Particle is beyond wavefront z at t_end."
                             f" z pos at time {t_end} is {f_interp(t_end)}")
 
-        # First solve edge parts (still to do)
 
         # Set integration points
         start_index = np.argmin(np.abs(self.track.time - t_start))
@@ -113,10 +113,8 @@ class EdgeRadSolver:
             for i, xi in enumerate(self.wavefront.x_axis):
                 print(i)
                 for j, yj in enumerate(self.wavefront.y_axis):
-                    # Form phase function and phase function inverse
                     r_obs = np.array([xi, yj, self.wavefront.z])[:, None] \
                             - self.track.r
-
                     r_norm = np.linalg.norm(r_obs, axis=0)
 
                     # Calc phase / gradient
@@ -126,7 +124,7 @@ class EdgeRadSolver:
 
                     # Phase function
                     phase_func = interpolate.InterpolatedUnivariateSpline(
-                        self.track.time, phase_samples, k=3)
+                        self.track.time, phase_samples, k=2)
 
                     # Form integrand function (f / gp)
                     n_dir_samples = r_obs[index, :] / r_norm
@@ -137,22 +135,25 @@ class EdgeRadSolver:
                            * phase_grad)
 
                     int1_func = interpolate.InterpolatedUnivariateSpline(
-                        phase_samples, int1_samples, k=3)
+                        phase_samples, int1_samples, k=2)
                     int2_func = interpolate.InterpolatedUnivariateSpline(
-                        phase_samples, int2_samples, k=3)
-
-
-
+                        phase_samples, int2_samples, k=2)
                     phase_int = phase_func(t_int_points)
-                    """
+
+                    """"
                     fig, ax = plt.subplots()
                     ax.scatter(t_int_points, phase_int)
                     fig, ax = plt.subplots()
                     ax.scatter(t_int_points, int1_func(phase_int))
+                    ax.plot(self.track.time, int1_func(phase_samples))
                     fig, ax = plt.subplots()
+                    ax.plot(self.track.time, int2_func(phase_samples))
                     ax.scatter(t_int_points, int2_func(phase_int))
+                    fig, ax = plt.subplots()
+                    plt.scatter(self.track.time, 1/ phase_grad)
                     plt.show()
                     """
+
                     # Perform real and imaginary integrals
                     real_part = self.filon_cos(int1_func, self.wavefront.omega,
                                                phase_int) + \
@@ -162,9 +163,66 @@ class EdgeRadSolver:
                                                phase_int) - \
                                 self.filon_cos(int2_func, self.wavefront.omega,
                                                phase_int)
+                    # need to add phase part from integration variable change
+                    centre = (real_part + 1j * imag_part) * np.exp(1j *
+                                    self.wavefront.omega * phase_samples[0])
+                    # Get the edge term
+                    start_edge_real, start_edge_imag = self.solve_edge(
+                        self.track.time[0], self.track.time[0],
+                        self.track.beta[:, 0], r_obs[:, 0],
+                        self.wavefront.omega)
+                    end_edge_real, end_edge_imag = self.solve_edge(
+                        self.track.time[end_index], self.track.time[end_index],
+                        self.track.beta[:, end_index], r_obs[:, end_index],
+                        self.wavefront.omega)
+                    edge = (start_edge_real[index] - end_edge_real[index]
+                            + (start_edge_imag[index] - end_edge_imag[index])
+                            * 1j)
 
-                    self.wavefront.field[index, i, j] = real_part \
-                                                        + 1j * imag_part
+                    self.wavefront.field[index, i, j] = centre# + edge
+
+    @staticmethod
+    def solve_edge(t, t_0, beta_0, r_0, omega):
+        """
+        Calculates the integral of the end parts in free space.
+        :param t: Current time
+        :param t_0: Time when beta and r are defined
+        :param beta_0: Velocity of particle at t=0
+        :param r_0: Position of particle at t=0
+        :param omega: Oscillation frequency
+        :return: Real and imaginary parts (real, imag)
+        """
+        b2 = (beta_0**2).sum()
+        rb = (r_0 * beta_0).sum()
+        r2 = (r_0**2.0).sum()
+        r_n = r2**0.5
+        n = r_0 / r_n
+        phase = t + r_n / c_light
+        t = t - t_0
+
+        # Calculate phase gradient
+        r_grad = (b2 * t + rb) / r_n
+        n_grad = (beta_0 * r_n - r_grad * r_0) / r2
+        phase_grad = 1 + r_grad / c_light
+        phase_grad_2nd = (b2 * r2 - rb**2) / (c_light * r_n**3)
+        func_real = (beta_0 - n) / r_n
+        func_imag = - n * c_light / (omega * r_n**2.0)
+
+        func_grad_real = -beta_0 * r_grad / r2 - (n_grad * r_n - r_grad * n) \
+                         / r2
+        func_grad_imag = - c_light * (n_grad * r2 - 2 * r_n * r_grad * n) \
+                    / (r2**2 * omega)
+
+        real_part = (func_grad_real * phase_grad - func_real * phase_grad_2nd) \
+                    / (omega**2.0 * phase_grad**3) + func_imag / (omega *
+                                                                  phase_grad)
+        imag_part = (func_grad_imag * phase_grad - func_imag * phase_grad_2nd) \
+                    / (omega**2.0 * phase_grad**3) - func_real / (omega *
+                                                                  phase_grad)
+        return (real_part * np.cos(omega * phase)
+                - imag_part * np.sin(omega * phase),
+                imag_part * np.cos(omega * phase)
+                + real_part * np.sin(omega * phase))
 
     def filon_sin(self, func, omega, x_samples):
         """
@@ -186,9 +244,8 @@ class EdgeRadSolver:
         # Find coefficients of quadratic approximation (points are shifted to
         # make A less singular)
         f = func(int_points)
-        ini_points_shift = int_points - int_points[:, 0, None]
-        A = np.stack([np.ones_like(ini_points_shift), ini_points_shift,
-                      ini_points_shift ** 2.0]).transpose((1, 2, 0))
+        A = np.stack([np.ones_like(int_points), int_points,
+                      int_points ** 2.0]).transpose((1, 2, 0))
         coeffs = np.linalg.solve(A, f)
 
         # Calculate moments and sum
@@ -218,9 +275,8 @@ class EdgeRadSolver:
         # Find coefficients of quadratic approximation (points are shifted to
         # make A less singular)
         f = func(int_points)
-        ini_points_shift = int_points - int_points[:, 0, None]
-        A = np.stack([np.ones_like(ini_points_shift), ini_points_shift,
-                      ini_points_shift**2.0]).transpose((1, 2, 0))
+        A = np.stack([np.ones_like(int_points), int_points,
+                      int_points**2.0]).transpose((1, 2, 0))
         coeffs = np.linalg.solve(A, f)
 
         # Calculate moments and sum
@@ -307,20 +363,21 @@ class EdgeRadSolver:
 
 if __name__ == "__main__":
     track = Track("./track.npy")
-    track.plot_track(0, 9, 1000, [2, 0])
+    print(track.time[-1])
+    track.plot_track(0, 8.5, 1000, [2, 0])
     plt.show()
     wavefnt = Wavefront(1.7526625849289021, 3.77e6,
-                        np.linspace(-0.01, 0.01, 100),
-                        np.linspace(-0.01, 0.01, 100))
+                        np.linspace(-0.01, 0.01, 400),
+                        np.linspace(-0.01, 0.01, 400))
 
     slvr = EdgeRadSolver(wavefnt, track)
-    #slvr.auto_res(1)
+    slvr.auto_res()
 
 
     tic = time.perf_counter()
-    slvr.solve(0, 9, 1000)
+    slvr.solve(0, 8.5, 1000)
     toc = time.perf_counter()
-    print(f"Downloaded the tutorial in {toc - tic:0.4f} seconds")
+    print(f"{toc - tic:0.4f} seconds")
     wavefnt.plot_intensity()
     np.save("int", wavefnt.field)
     plt.show()
