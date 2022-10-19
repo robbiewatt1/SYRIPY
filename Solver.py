@@ -6,6 +6,7 @@ from Track import Track
 from Wavefront import Wavefront
 import time
 import os
+import torch
 
 c_light = 0.29979245
 
@@ -81,7 +82,6 @@ class EdgeRadSolver:
         self.track.r = np.concatenate(r_list).T
         print("Reduction factor: ", init_samples / self.track.time.shape[0])
 
-
     def solve(self, t_start, t_end, n_int, auto_res=True):
         """
         Main function to solve the radiation field at the wavefront.
@@ -101,85 +101,83 @@ class EdgeRadSolver:
             raise Exception(f"Particle is beyond wavefront z at t_end."
                             f" z pos at time {t_end} is {f_interp(t_end)}")
 
-
         # Set integration points
         start_index = np.argmin(np.abs(self.track.time - t_start))
         end_index = np.argmin(np.abs(self.track.time - t_end))
         skip = int((end_index - start_index) / n_int)+1
         t_int_points = self.track.time[start_index:end_index:skip]
 
-        for index in [0, 1]:
-            # loop through wavefront array
-            for i, xi in enumerate(self.wavefront.x_axis):
-                print(i)
-                for j, yj in enumerate(self.wavefront.y_axis):
-                    r_obs = np.array([xi, yj, self.wavefront.z])[:, None] \
-                            - self.track.r
-                    r_norm = np.linalg.norm(r_obs, axis=0)
+        # loop through wavefront array
+        for i, xi in enumerate(self.wavefront.x_axis):
+            print(i)
+            for j, yj in enumerate(self.wavefront.y_axis):
+                r_obs = np.array([xi, yj, self.wavefront.z])[:, None] \
+                        - self.track.r
+                r_norm = np.linalg.norm(r_obs, axis=0)
 
-                    # Calc phase / gradient
-                    phase_samples = self.track.time + r_norm / c_light
-                    phase_samples = phase_samples - phase_samples[0]
-                    phase_grad = np.gradient(phase_samples, self.track.time)
+                # Calc phase / gradient
+                phase_samples = self.track.time + r_norm / c_light
+                phase_samples = phase_samples - phase_samples[0]
+                phase_grad = np.gradient(phase_samples, self.track.time)
 
-                    # Phase function
-                    phase_func = interpolate.InterpolatedUnivariateSpline(
-                        self.track.time, phase_samples, k=2)
+                # Phase function
+                phase_func = interpolate.InterpolatedUnivariateSpline(
+                    self.track.time, phase_samples, k=2)
 
-                    # Form integrand function (f / gp)
-                    n_dir_samples = r_obs[index, :] / r_norm
-                    int1_samples = (self.track.beta[index] - n_dir_samples) \
-                        / (r_norm * phase_grad)
-                    int2_samples = c_light * n_dir_samples \
-                        / (self.wavefront.omega * r_norm**2.0
-                           * phase_grad)
+                # Form integrand function (f / gp)
+                n_dir_samples = r_obs / r_norm
+                int1_samples = (self.track.beta - n_dir_samples) \
+                    / (r_norm * phase_grad)
+                int2_samples = c_light * n_dir_samples \
+                    / (self.wavefront.omega * r_norm**2.0
+                       * phase_grad)
 
-                    int1_func = interpolate.InterpolatedUnivariateSpline(
-                        phase_samples, int1_samples, k=2)
-                    int2_func = interpolate.InterpolatedUnivariateSpline(
-                        phase_samples, int2_samples, k=2)
-                    phase_int = phase_func(t_int_points)
+                int1_func = interpolate.InterpolatedUnivariateSpline(
+                    phase_samples, int1_samples, k=2)
+                int2_func = interpolate.InterpolatedUnivariateSpline(
+                    phase_samples, int2_samples, k=2)
+                phase_int = phase_func(t_int_points)
 
-                    """"
-                    fig, ax = plt.subplots()
-                    ax.scatter(t_int_points, phase_int)
-                    fig, ax = plt.subplots()
-                    ax.scatter(t_int_points, int1_func(phase_int))
-                    ax.plot(self.track.time, int1_func(phase_samples))
-                    fig, ax = plt.subplots()
-                    ax.plot(self.track.time, int2_func(phase_samples))
-                    ax.scatter(t_int_points, int2_func(phase_int))
-                    fig, ax = plt.subplots()
-                    plt.scatter(self.track.time, 1/ phase_grad)
-                    plt.show()
-                    """
+                """"
+                fig, ax = plt.subplots()
+                ax.scatter(t_int_points, phase_int)
+                fig, ax = plt.subplots()
+                ax.scatter(t_int_points, int1_func(phase_int))
+                ax.plot(self.track.time, int1_func(phase_samples))
+                fig, ax = plt.subplots()
+                ax.plot(self.track.time, int2_func(phase_samples))
+                ax.scatter(t_int_points, int2_func(phase_int))
+                fig, ax = plt.subplots()
+                plt.scatter(self.track.time, 1/ phase_grad)
+                plt.show()
+                """
 
-                    # Perform real and imaginary integrals
-                    real_part = self.filon_cos(int1_func, self.wavefront.omega,
-                                               phase_int) + \
-                                self.filon_sin(int2_func, self.wavefront.omega,
-                                               phase_int)
-                    imag_part = self.filon_sin(int1_func, self.wavefront.omega,
-                                               phase_int) - \
-                                self.filon_cos(int2_func, self.wavefront.omega,
-                                               phase_int)
-                    # need to add phase part from integration variable change
-                    centre = (real_part + 1j * imag_part) * np.exp(1j *
-                                    self.wavefront.omega * phase_samples[0])
-                    # Get the edge term
-                    start_edge_real, start_edge_imag = self.solve_edge(
-                        self.track.time[0], self.track.time[0],
-                        self.track.beta[:, 0], r_obs[:, 0],
-                        self.wavefront.omega)
-                    end_edge_real, end_edge_imag = self.solve_edge(
-                        self.track.time[end_index], self.track.time[end_index],
-                        self.track.beta[:, end_index], r_obs[:, end_index],
-                        self.wavefront.omega)
-                    edge = (start_edge_real[index] - end_edge_real[index]
-                            + (start_edge_imag[index] - end_edge_imag[index])
-                            * 1j)
+                # Perform real and imaginary integrals
+                real_part = self.filon_cos(int1_func, self.wavefront.omega,
+                                           phase_int) + \
+                            self.filon_sin(int2_func, self.wavefront.omega,
+                                           phase_int)
+                imag_part = self.filon_sin(int1_func, self.wavefront.omega,
+                                           phase_int) - \
+                            self.filon_cos(int2_func, self.wavefront.omega,
+                                           phase_int)
+                # need to add phase part from integration variable change
+                centre = (real_part + 1j * imag_part) * np.exp(1j *
+                                self.wavefront.omega * phase_samples[0])
+                # Get the edge term
+                start_edge_real, start_edge_imag = self.solve_edge(
+                    self.track.time[0], self.track.time[0],
+                    self.track.beta[:, 0], r_obs[:, 0],
+                    self.wavefront.omega)
+                end_edge_real, end_edge_imag = self.solve_edge(
+                    self.track.time[end_index], self.track.time[end_index],
+                    self.track.beta[:, end_index], r_obs[:, end_index],
+                    self.wavefront.omega)
+                edge = (start_edge_real[index] - end_edge_real[index]
+                        + (start_edge_imag[index] - end_edge_imag[index])
+                        * 1j)
 
-                    self.wavefront.field[index, i, j] = centre# + edge
+                self.wavefront.field[index, i, j] = centre# + edge
 
     @staticmethod
     def solve_edge(t, t_0, beta_0, r_0, omega):
@@ -359,6 +357,57 @@ class EdgeRadSolver:
                 - (x_lim[..., 0]**2 * omega**2 - 2)
                 * np.sin(omega * x_lim[..., 0]) - 2 * omega * x_lim[..., 0]
                 * np.cos(omega * x_lim[..., 0])) / omega**3.0
+
+
+class SplineInterp:
+    """
+    Cubic spline interpolator class using pytorch. Can perform multiple
+    interpolations along batch dimension.
+    """
+
+    def __init__(self, x, y):
+        """
+        :param x: x samples
+        :param y: y samples
+        """
+        self.x = x
+        self.y = y
+        self.device = x.device
+        self.A = torch.tensor([
+            [1, 0, -3, 2],
+            [0, 1, -2, 1],
+            [0, 0, 3, -2],
+            [0, 0, -1, 1]],
+            dtype=x.dtype, device=self.device)
+
+    def h_poly(self, x):
+        """
+        Calculates the Hermite polynomials
+        :param x: Locations to calculate polynomials at
+        :return: Hermite polynomials
+        """
+        xx = x[..., None, :] ** torch.arange(
+            4, device=self.device)[..., :, None]
+        return torch.matmul(self.A, xx)
+
+    def __call__(self, xs):
+        """
+        Performs interpolation at location xs.
+        :param xs: locations to interpolate
+        :return: Interpolated value
+        """
+        m = ((self.y[..., 1:] - self.y[..., :-1]) /
+             (self.x[..., 1:] - self.x[..., :-1]))
+        m = torch.cat([m[..., [0]], (m[..., 1:] + m[..., :-1]) / 2,
+                       m[..., [-1]]], dim=-1)
+        idx = torch.searchsorted(self.x[..., 1:].contiguous(), xs)
+        dx = (torch.gather(self.x, dim=-1, index=idx+1)
+              - torch.gather(self.x, dim=-1, index=idx))
+        hh = self.h_poly((xs - torch.gather(self.x, dim=-1, index=idx)) / dx)
+        return (hh[..., 0, :] * torch.gather(self.y, dim=-1, index=idx)
+                + hh[..., 1, :] * torch.gather(m, dim=-1, index=idx)
+                * dx + hh[..., 2, :] * torch.gather(self.y, dim=-1, index=idx+1)
+                + hh[..., 3, :] * torch.gather(m, dim=-1, index=idx+1) * dx)
 
 
 if __name__ == "__main__":
