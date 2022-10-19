@@ -1,6 +1,6 @@
 import numpy as np
+import torch
 import matplotlib.pyplot as plt
-from scipy import interpolate
 
 
 class Track:
@@ -9,29 +9,29 @@ class Track:
     loads a numpy array from an SRW simulation. I will add an RK4 solver soon.
     """
 
-    def __init__(self, track_file):
+    def __init__(self, track_file, device=None):
         """
         :param track_file: SRW file containing particle track
+        :param device: Device being used (cpu / gpu)
         """
+        # Load from track file
         self.track = np.load(track_file)
-        self.time = self.track[0]
-        self.r = self.track[1:4]
-        self.beta = self.track[4:]
+        time = self.track[0]
+        r = self.track[1:4]
+        beta = self.track[4:]
 
-    def plot_track(self, t_start, t_end, n_samples, axes):
+        # Convert to pytorch
+        self.time = torch.tensor(time, device=device)
+        self.r = torch.tensor(r, device=device)
+        self.beta = torch.tensor(beta, device=device)
+
+    def plot_track(self, axes):
         """
         Plot interpolated track (Uses cubic spline)
-        :param t_start: Start time (ns)
-        :param t_end: End time(ns)
-        :param n_samples: Sample points
         :param axes: Axes to plot (e. g z-x [2, 0])
         :return: fig, ax
         """
-        time = np.linspace(t_start, t_end, n_samples)
-        interp0 = interpolate.InterpolatedUnivariateSpline(self.time,
-                                                           self.r[axes[0]])
-        interp1 = interpolate.InterpolatedUnivariateSpline(self.time,
-                                                           self.r[axes[1]])
         fig, ax = plt.subplots()
-        ax.plot(interp0(time), interp1(time))
+        ax.plot(self.r[:, axes[0]].cpu().detach().numpy(),
+                self.r[:, axes[1]].cpu().detach().numpy())
         return fig, ax

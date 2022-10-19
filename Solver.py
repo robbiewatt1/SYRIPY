@@ -34,6 +34,7 @@ class EdgeRadSolver:
         :param ds_windows: Number of windows in which the path is down sampled
         :param ds_min: log10 of minimum down sampling factor
         """
+        # TODO: Make auto_res work with torch
 
         init_samples = self.track.time.shape[0]
 
@@ -82,14 +83,16 @@ class EdgeRadSolver:
         self.track.r = np.concatenate(r_list).T
         print("Reduction factor: ", init_samples / self.track.time.shape[0])
 
-    def solve(self, t_start, t_end, n_int, auto_res=True):
+    def solve(self, t_start, t_end, n_int):
         """
         Main function to solve the radiation field at the wavefront.
         Interaction limits must be within time array of track
-        :param t_start: Stat time of interation (ns)
+        :param t_start: Stat time of integration (ns)
         :param t_end: End time of
         :param n_int: Number of sample in integration
-        :param auto_res: Automatically reduce resolution.
+        """
+
+        # TODO: Make checks work with torch
         """
         # check that t_start and t_end are acceptable
         f_interp = interpolate.interp1d(self.track.time, self.track.r[2])
@@ -100,12 +103,59 @@ class EdgeRadSolver:
         if f_interp(t_end) > self.wavefront.z:
             raise Exception(f"Particle is beyond wavefront z at t_end."
                             f" z pos at time {t_end} is {f_interp(t_end)}")
-
+        """
+        # TODO: Change
         # Set integration points
-        start_index = np.argmin(np.abs(self.track.time - t_start))
-        end_index = np.argmin(np.abs(self.track.time - t_end))
+        start_index = torch.argmin(torch.abs(self.track.time - t_start))
+        end_index = torch.argmin(np.abs(self.track.time - t_end))
         skip = int((end_index - start_index) / n_int)+1
         t_int_points = self.track.time[start_index:end_index:skip]
+
+        # Calculate observation points
+        r_obs = self.wavefront.coords[..., None] - self.track.r
+        r_norm = torch.linalg.norm(r_obs, dim=2, keepdim=True)
+        n_dir = r_obs / r_norm
+
+        # Calculate the phase function and gradient
+        phase = self.track.time + r_norm / c_light
+        phase = phase - phase[..., 0, None]
+        phase_int = phase[start_index:end_index:skip]
+
+        # TODO: The gradient function liked to work on and return lists
+        #  (can probably speed it up)
+        phase_grad = torch.gradient(
+            torch.flatten(phase, start_dim=0, end_dim=2),
+            spacing=(self.track.time,), dim=1)
+        phase_grad = torch.reshape(torch.stack(phase_grad),
+                                   (self.wavefront.n_samples[0],
+                                    self.wavefront.n_samples[0],
+                                    1, -1))
+
+        # Now calculate inegrand samples
+        int1_samples = (self.track.beta - n_dir) / (r_norm * phase_grad)
+        int2_samples = c_light * n_dir / (self.wavefront.omega * r_norm ** 2.0
+                          * phase_grad)
+
+        int1_func = SplineInterp(phase, int1_samples)
+        int2_func = SplineInterp(phase, int2_samples)
+        print(phase.shape, int1_samples.shape)
+        real_part = self.filon_cos(int1_func, self.wavefront.omega,
+                                   phase_int)
+        input()
+        #+ \
+                    #self.filon_sin(int2_func, self.wavefront.omega,
+                    #               phase_int)
+
+        print(int1_samples.shape, int2_samples.shape)
+
+
+        print(phase.shape, phase_int.shape)
+
+
+
+        input()
+
+
 
         # loop through wavefront array
         for i, xi in enumerate(self.wavefront.x_axis):
@@ -265,10 +315,16 @@ class EdgeRadSolver:
         """
 
         # Create sample point array
-        lower_lim = x_samples[:-1]
-        upper_lim = x_samples[1:]
+        lower_lim = x_samples[..., :-1]
+        upper_lim = x_samples[..., 1:]
         mid_point = lower_lim + (upper_lim - lower_lim) / 2
-        int_points = np.stack([lower_lim, mid_point, upper_lim]).T
+        print(mid_point.shape)
+        int_points = torch.stack([lower_lim, mid_point, upper_lim], dim=-1)
+        print(int_points.shape)
+        input()
+        f = func(int_points)
+
+
 
         # Find coefficients of quadratic approximation (points are shifted to
         # make A less singular)
@@ -293,8 +349,8 @@ class EdgeRadSolver:
         :param x_lim: Integration limits [xi, xf]
         :return: Zeroth moment [sin(omega x)]
         """
-        return (np.cos(omega * x_lim[..., 0])
-                - np.cos(omega * x_lim[..., 1])) / omega
+        return (torch.cos(omega * x_lim[..., 0])
+                - torch.cos(omega * x_lim[..., 1])) / omega
 
     @staticmethod
     def x_sin_moment(omega, x_lim):
@@ -303,10 +359,10 @@ class EdgeRadSolver:
         :param x_lim: Integration limits [xi, xf]
         :return: First moment [x sin(omega x)]
         """
-        return (np.sin(omega * x_lim[..., 1]) - x_lim[..., 1] * omega
-                * np.cos(omega * x_lim[..., 1]) - np.sin(omega * x_lim[..., 0])
-                + x_lim[..., 0] * omega * np.cos(omega * x_lim[..., 0])) \
-               / omega**2
+        return (torch.sin(omega * x_lim[..., 1]) - x_lim[..., 1] * omega
+                * torch.cos(omega * x_lim[..., 1])
+                - torch.sin(omega * x_lim[..., 0]) + x_lim[..., 0] * omega
+                * torch.cos(omega * x_lim[..., 0])) / omega**2
 
     @staticmethod
     def x2_sin_moment(omega, x_lim):
@@ -316,11 +372,11 @@ class EdgeRadSolver:
         :return: Second moment [x^2 sin(omega x)]
         """
         return ((2 - x_lim[..., 1]**2 * omega**2)
-                * np.cos(omega * x_lim[..., 1]) + 2 * omega * x_lim[..., 1]
-                * np.sin(omega * x_lim[..., 1])
+                * torch.cos(omega * x_lim[..., 1]) + 2 * omega * x_lim[..., 1]
+                * torch.sin(omega * x_lim[..., 1])
                 - (2 - x_lim[..., 0]**2 * omega**2)
-                * np.cos(omega * x_lim[..., 0]) - 2 * omega * x_lim[..., 0]
-                * np.sin(omega * x_lim[..., 0])) / omega**3.0
+                * torch.cos(omega * x_lim[..., 0]) - 2 * omega * x_lim[..., 0]
+                * torch.sin(omega * x_lim[..., 0])) / omega**3.0
 
     @staticmethod
     def cos_moment(omega, x_lim):
@@ -329,8 +385,8 @@ class EdgeRadSolver:
         :param x_lim: Integration limits [xi, xf]
         :return: Zeroth moment [cos(omega x)]
         """
-        return (np.sin(omega * x_lim[..., 1])
-                - np.sin(omega * x_lim[..., 0])) / omega
+        return (torch.sin(omega * x_lim[..., 1])
+                - torch.sin(omega * x_lim[..., 0])) / omega
 
     @staticmethod
     def x_cos_moment(omega, x_lim):
@@ -339,10 +395,10 @@ class EdgeRadSolver:
         :param x_lim: Integration limits [xi, xf]
         :return: First moment [x cos(omega x)]
         """
-        return (np.cos(omega * x_lim[..., 1]) + x_lim[..., 1] * omega
-                * np.sin(omega * x_lim[..., 1]) - np.cos(omega * x_lim[..., 0])
-                - x_lim[..., 0] * omega * np.sin(omega * x_lim[..., 0])) \
-               / omega**2
+        return (torch.cos(omega * x_lim[..., 1]) + x_lim[..., 1] * omega
+                * torch.sin(omega * x_lim[..., 1])
+                - torch.cos(omega * x_lim[..., 0]) - x_lim[..., 0] * omega
+                * torch.sin(omega * x_lim[..., 0])) / omega**2
 
     @staticmethod
     def x2_cos_moment(omega, x_lim):
@@ -352,11 +408,11 @@ class EdgeRadSolver:
         :return: Second moment [x^2 cos(omega x)]
         """
         return ((x_lim[..., 1]**2 * omega**2 - 2)
-                * np.sin(omega * x_lim[..., 1]) + 2 * omega * x_lim[..., 1]
-                * np.cos(omega * x_lim[..., 1])
+                * torch.sin(omega * x_lim[..., 1]) + 2 * omega * x_lim[..., 1]
+                * torch.cos(omega * x_lim[..., 1])
                 - (x_lim[..., 0]**2 * omega**2 - 2)
-                * np.sin(omega * x_lim[..., 0]) - 2 * omega * x_lim[..., 0]
-                * np.cos(omega * x_lim[..., 0])) / omega**3.0
+                * torch.sin(omega * x_lim[..., 0]) - 2 * omega * x_lim[..., 0]
+                * torch.cos(omega * x_lim[..., 0])) / omega**3.0
 
 
 class SplineInterp:
@@ -411,23 +467,13 @@ class SplineInterp:
 
 
 if __name__ == "__main__":
+
     track = Track("./track.npy")
-    print(track.time[-1])
-    track.plot_track(0, 8.5, 1000, [2, 0])
-    plt.show()
+    print(track.time[0], track.time[-1])
     wavefnt = Wavefront(1.7526625849289021, 3.77e6,
-                        np.linspace(-0.01, 0.01, 400),
-                        np.linspace(-0.01, 0.01, 400))
+                        [-0.01, 0.01, -0.01, 0.01],
+                        [10, 10])
 
     slvr = EdgeRadSolver(wavefnt, track)
-    slvr.auto_res()
-
-
-    tic = time.perf_counter()
-    slvr.solve(0, 8.5, 1000)
-    toc = time.perf_counter()
-    print(f"{toc - tic:0.4f} seconds")
-    wavefnt.plot_intensity()
-    np.save("int", wavefnt.field)
-    plt.show()
+    slvr.solve(0, 10, 1000)
 
