@@ -104,59 +104,47 @@ class EdgeRadSolver:
             raise Exception(f"Particle is beyond wavefront z at t_end."
                             f" z pos at time {t_end} is {f_interp(t_end)}")
         """
-        # TODO: Change
+
         # Set integration points
         start_index = torch.argmin(torch.abs(self.track.time - t_start))
-        end_index = torch.argmin(np.abs(self.track.time - t_end))
+        end_index = torch.argmin(torch.abs(self.track.time - t_end))
         skip = int((end_index - start_index) / n_int)+1
         t_int_points = self.track.time[start_index:end_index:skip]
-
         # Calculate observation points
         r_obs = self.wavefront.coords[..., None] - self.track.r
-        r_norm = torch.linalg.norm(r_obs, dim=2, keepdim=True)
+        r_norm = torch.linalg.norm(r_obs, dim=1, keepdim=True)
         n_dir = r_obs / r_norm
 
         # Calculate the phase function and gradient
         phase = self.track.time + r_norm / c_light
         phase = phase - phase[..., 0, None]
-        phase_int = phase[start_index:end_index:skip]
+        phase_grad = torch.unsqueeze(torch.gradient(torch.squeeze(phase),
+                                                    spacing=(self.track.time,),
+                                                    dim=1)[0], dim=1)
 
-        # TODO: The gradient function liked to work on and return lists
-        #  (can probably speed it up)
-        phase_grad = torch.gradient(
-            torch.flatten(phase, start_dim=0, end_dim=2),
-            spacing=(self.track.time,), dim=1)
-        phase_grad = torch.reshape(torch.stack(phase_grad),
-                                   (self.wavefront.n_samples[0],
-                                    self.wavefront.n_samples[0],
-                                    1, -1))
-
-        # Now calculate inegrand samples
+        # Now calculate integrand samples
         int1_samples = (self.track.beta - n_dir) / (r_norm * phase_grad)
         int2_samples = c_light * n_dir / (self.wavefront.omega * r_norm ** 2.0
-                          * phase_grad)
-
+                                          * phase_grad)
+        # Repeat phase along r axis for interpolation
+        phase = phase.repeat(1, 3, 1)
         int1_func = SplineInterp(phase, int1_samples)
         int2_func = SplineInterp(phase, int2_samples)
-        print(phase.shape, int1_samples.shape)
-        real_part = self.filon_cos(int1_func, self.wavefront.omega,
-                                   phase_int)
-        input()
-        #+ \
-                    #self.filon_sin(int2_func, self.wavefront.omega,
-                    #               phase_int)
 
-        print(int1_samples.shape, int2_samples.shape)
+        phase_int = phase[..., start_index:end_index:skip]
+        real_part = (self.filon_cos(int1_func, self.wavefront.omega, phase_int)
+                     + self.filon_sin(int2_func, self.wavefront.omega,
+                                      phase_int))
+        imag_part = (self.filon_sin(int1_func, self.wavefront.omega, phase_int)
+                     - self.filon_cos(int2_func, self.wavefront.omega,
+                                      phase_int))
 
-
-        print(phase.shape, phase_int.shape)
-
-
-
-        input()
+        self.wavefront.field = (real_part + 1j * imag_part).reshape(
+            self.wavefront.n_samples_xy[0], self.wavefront.n_samples_xy[1], 3)
 
 
 
+        """
         # loop through wavefront array
         for i, xi in enumerate(self.wavefront.x_axis):
             print(i)
@@ -188,7 +176,7 @@ class EdgeRadSolver:
                     phase_samples, int2_samples, k=2)
                 phase_int = phase_func(t_int_points)
 
-                """"
+
                 fig, ax = plt.subplots()
                 ax.scatter(t_int_points, phase_int)
                 fig, ax = plt.subplots()
@@ -200,7 +188,7 @@ class EdgeRadSolver:
                 fig, ax = plt.subplots()
                 plt.scatter(self.track.time, 1/ phase_grad)
                 plt.show()
-                """
+
 
                 # Perform real and imaginary integrals
                 real_part = self.filon_cos(int1_func, self.wavefront.omega,
@@ -228,6 +216,7 @@ class EdgeRadSolver:
                         * 1j)
 
                 self.wavefront.field[index, i, j] = centre# + edge
+        """
 
     @staticmethod
     def solve_edge(t, t_0, beta_0, r_0, omega):
@@ -282,26 +271,21 @@ class EdgeRadSolver:
         :param x_samples: Sample points of integration.
         :return: Integration result.
         """
-
-        # Create sample point array
-        lower_lim = x_samples[:-1]
-        upper_lim = x_samples[1:]
+        lower_lim = x_samples[..., :-1]
+        upper_lim = x_samples[..., 1:]
         mid_point = lower_lim + (upper_lim - lower_lim) / 2
-        int_points = np.stack([lower_lim, mid_point, upper_lim]).T
-
-        # Find coefficients of quadratic approximation (points are shifted to
-        # make A less singular)
-        f = func(int_points)
-        A = np.stack([np.ones_like(int_points), int_points,
-                      int_points ** 2.0]).transpose((1, 2, 0))
-        coeffs = np.linalg.solve(A, f)
-
-        # Calculate moments and sum
-        moment_0th = self.sin_moment(omega, int_points[:, ::2])
-        moment_1st = self.x_sin_moment(omega, int_points[:, ::2])
-        moment_2nd = self.x2_sin_moment(omega, int_points[:, ::2])
-        return np.sum(coeffs[:, 0] * moment_0th + coeffs[:, 1] * moment_1st
-                      + coeffs[:, 2] * moment_2nd)
+        int_points = torch.stack([lower_lim, mid_point, upper_lim], dim=-1)
+        f = func(int_points.flatten(-2, -1)).reshape(self.wavefront.n_samples,
+                                                     3, -1, 3)
+        A = torch.stack([torch.ones_like(int_points), int_points,
+                         int_points**2.0], dim=-1)
+        coeffs = torch.linalg.solve(A, f)
+        moment_0th = self.sin_moment(omega, int_points[..., ::2])
+        moment_1st = self.x_sin_moment(omega, int_points[..., ::2])
+        moment_2nd = self.x2_sin_moment(omega, int_points[..., ::2])
+        return torch.sum(coeffs[..., 0] * moment_0th
+                         + coeffs[..., 1] * moment_1st
+                         + coeffs[..., 2] * moment_2nd, dim=-1)
 
     def filon_cos(self, func, omega, x_samples):
         """
@@ -313,34 +297,22 @@ class EdgeRadSolver:
         :param x_samples: Sample points of integration.
         :return: Integration result.
         """
-
         # Create sample point array
         lower_lim = x_samples[..., :-1]
         upper_lim = x_samples[..., 1:]
         mid_point = lower_lim + (upper_lim - lower_lim) / 2
-        print(mid_point.shape)
         int_points = torch.stack([lower_lim, mid_point, upper_lim], dim=-1)
-        print(int_points.shape)
-        input()
-        f = func(int_points)
-
-
-
-        # Find coefficients of quadratic approximation (points are shifted to
-        # make A less singular)
-        f = func(int_points)
-        A = np.stack([np.ones_like(int_points), int_points,
-                      int_points**2.0]).transpose((1, 2, 0))
-        coeffs = np.linalg.solve(A, f)
-
-        # Calculate moments and sum
-        moment_0th = self.cos_moment(omega, int_points[:, ::2])
-        moment_1st = self.x_cos_moment(omega, int_points[:, ::2])
-        moment_2nd = self.x2_cos_moment(omega, int_points[:, ::2])
-        return np.sum(coeffs[:, 0] * moment_0th + coeffs[:, 1] * moment_1st
-                      + coeffs[:, 2] * moment_2nd)
-
-    # Define the moments for the integration
+        f = func(int_points.flatten(-2, -1)).reshape(self.wavefront.n_samples,
+                                                     3, -1, 3)
+        A = torch.stack([torch.ones_like(int_points), int_points,
+                         int_points**2.0], dim=-1)
+        coeffs = torch.linalg.solve(A, f)
+        moment_0th = self.cos_moment(omega, int_points[..., ::2])
+        moment_1st = self.x_cos_moment(omega, int_points[..., ::2])
+        moment_2nd = self.x2_cos_moment(omega, int_points[..., ::2])
+        return torch.sum(coeffs[..., 0] * moment_0th
+                         + coeffs[..., 1] * moment_1st
+                         + coeffs[..., 2] * moment_2nd, dim=-1)
 
     @staticmethod
     def sin_moment(omega, x_lim):
@@ -467,13 +439,20 @@ class SplineInterp:
 
 
 if __name__ == "__main__":
+    print(print(torch.__version__))
+    print(torch.version.cuda)
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    #device = "cpu"
+    print(device)
 
-    track = Track("./track.npy")
+    track = Track("./track.npy", device=device)
     print(track.time[0], track.time[-1])
     wavefnt = Wavefront(1.7526625849289021, 3.77e6,
                         [-0.01, 0.01, -0.01, 0.01],
-                        [10, 10])
+                        [50, 50], device=device)
 
     slvr = EdgeRadSolver(wavefnt, track)
-    slvr.solve(0, 10, 1000)
+    cProfile.run("slvr.solve(0, 10, 5)")
+    wavefnt.plot_intensity()
+    plt.show()
 
