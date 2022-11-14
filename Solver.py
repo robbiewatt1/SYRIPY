@@ -452,7 +452,7 @@ if __name__ == "__main__":
                         [50, 50], device=device)
 
     slvr = EdgeRadSolver(wavefnt, track)
-    cProfile.run("slvr.solve(0, 10, 5)")
+    cProfile.run("slvr.solve(0, 10, 1000)")
     wavefnt.plot_intensity()
     plt.show()
 

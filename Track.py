@@ -21,9 +21,9 @@ class Track:
         beta = self.track[4:]
 
         # Convert to pytorch
-        self.time = torch.tensor(time, dtype=torch.float, device=device)
-        self.r = torch.tensor(r,  dtype=torch.float, device=device)
-        self.beta = torch.tensor(beta,  dtype=torch.float, device=device)
+        self.time = torch.tensor(time, device=device)
+        self.r = torch.tensor(r, device=device)
+        self.beta = torch.tensor(beta, device=device)
 
     def plot_track(self, axes):
         """
