@@ -7,6 +7,8 @@ from Wavefront import Wavefront
 import time
 import os
 import torch
+from torch.profiler import profile, record_function, ProfilerActivity
+
 
 c_light = 0.29979245
 
@@ -25,7 +27,7 @@ class EdgeRadSolver:
         self.wavefront = wavefront
         self.track = track
 
-    def auto_res(self, sample_x=10, ds_windows=10, ds_min=3):
+    def auto_res(self, sample_x=300, ds_windows=200, ds_min=3):
         """
         Automatically down-samples the track based on large values of
         objective function obj = |grad(1/grad(g))|. Where g(t) is the phase
@@ -39,51 +41,51 @@ class EdgeRadSolver:
         init_samples = self.track.time.shape[0]
 
         # Calculate grad(1/ grad(phi)) at sample_x points.
-        test_index = int(self.wavefront.x_axis.shape[0] / sample_x)
-        r_obs = np.stack([self.wavefront.x_axis[::test_index],
-                          np.zeros(sample_x),
-                          np.ones(sample_x) * self.wavefront.z]).T[:, :, None] \
-                - self.track.r
-        r_norm = np.linalg.norm(r_obs, axis=1)
+        test_index = int(self.wavefront.x_axis.shape[0] / sample_x
+                         * self.wavefront.n_samples_xy[0])
+        r_obs = self.wavefront.coords[::test_index, :, None] - self.track.r
+        r_norm = torch.linalg.norm(r_obs, dim=1)
         phase_samples = self.track.time[None, :] + r_norm / c_light
-        phase_grad = np.gradient(phase_samples, self.track.time, axis=1)
-        grad_inv_grad = np.gradient(1 / phase_grad, self.track.time, axis=1)
-        obj_val = np.max(np.abs(grad_inv_grad), axis=0)
+        phase_grad = torch.gradient(phase_samples,
+                                    spacing=(self.track.time,), dim=1)[0]
+        inv_phase_grad = 1 / phase_grad
+        grad_inv_grad = torch.gradient(torch.squeeze(inv_phase_grad),
+                                       spacing=(self.track.time,), dim=1)[0]
+        obj_val, _ = torch.max(torch.abs(grad_inv_grad), dim=0)
 
         # Calculate mean objective value in windows
         window_shape = (-1, int(obj_val.shape[0] / ds_windows))
-        obj_val_windows = np.mean(obj_val.reshape(window_shape), axis=1)
+        obj_val_windows, _ = torch.max(obj_val.reshape(window_shape), dim=1)
 
         # Calculate the log10 down-sampling factor for each window
-        window_ds_fact = -np.log10(obj_val_windows
-                                   / np.max(obj_val_windows))
+        window_ds_fact = -torch.log10(obj_val_windows
+                                      / torch.max(obj_val_windows))
         # Clip down sampling at min value
-        window_ds_fact = np.clip(window_ds_fact, a_min=0, a_max=ds_min)
-        window_ds_fact = window_ds_fact
+        window_ds_fact = torch.clip(window_ds_fact, min=0, max=ds_min)
 
         # Apply down-sampling to track values
         # time
         time_list = list(self.track.time.reshape(window_shape))
         time_list = [t[::int(10**window_ds_fact[i])]
                      for i, t in enumerate(time_list)]
-        self.track.time = np.concatenate(time_list)
+        self.track.time = torch.cat(time_list)
 
         # Beta
         b_list = list(self.track.beta.reshape((3, *window_shape))
-                      .transpose(1, 2, 0))
+                      .permute(1, 2, 0))
         beta_list = [b[::int(10**window_ds_fact[i])]
                      for i, b in enumerate(b_list)]
-        self.track.beta = np.concatenate(beta_list).T
+        self.track.beta = torch.cat(beta_list).T
 
         # Position
         r_list = list(self.track.r.reshape((3, *window_shape))
-                      .transpose(1, 2, 0))
+                      .permute(1, 2, 0))
         r_list = [r[::int(10**window_ds_fact[i])]
                   for i, r in enumerate(r_list)]
-        self.track.r = np.concatenate(r_list).T
+        self.track.r = torch.cat(r_list).T
         print("Reduction factor: ", init_samples / self.track.time.shape[0])
 
-    def solve(self, t_start, t_end, n_int):
+    def solve(self):
         """
         Main function to solve the radiation field at the wavefront.
         Interaction limits must be within time array of track
@@ -105,11 +107,6 @@ class EdgeRadSolver:
                             f" z pos at time {t_end} is {f_interp(t_end)}")
         """
 
-        # Set integration points
-        start_index = torch.argmin(torch.abs(self.track.time - t_start))
-        end_index = torch.argmin(torch.abs(self.track.time - t_end))
-        skip = int((end_index - start_index) / n_int)+1
-        t_int_points = self.track.time[start_index:end_index:skip]
         # Calculate observation points
         r_obs = self.wavefront.coords[..., None] - self.track.r
         r_norm = torch.linalg.norm(r_obs, dim=1, keepdim=True)
@@ -130,14 +127,12 @@ class EdgeRadSolver:
         phase = phase.repeat(1, 3, 1)
         int1_func = SplineInterp(phase, int1_samples)
         int2_func = SplineInterp(phase, int2_samples)
-
-        phase_int = phase[..., start_index:end_index:skip]
-        real_part = (self.filon_cos(int1_func, self.wavefront.omega, phase_int)
+        real_part = (self.filon_cos(int1_func, self.wavefront.omega, phase)
                      + self.filon_sin(int2_func, self.wavefront.omega,
-                                      phase_int))
-        imag_part = (self.filon_sin(int1_func, self.wavefront.omega, phase_int)
+                                      phase))
+        imag_part = (self.filon_sin(int1_func, self.wavefront.omega, phase)
                      - self.filon_cos(int2_func, self.wavefront.omega,
-                                      phase_int))
+                                      phase))
 
         self.wavefront.field = (real_part + 1j * imag_part).reshape(
             self.wavefront.n_samples_xy[0], self.wavefront.n_samples_xy[1], 3)
@@ -271,21 +266,31 @@ class EdgeRadSolver:
         :param x_samples: Sample points of integration.
         :return: Integration result.
         """
-        lower_lim = x_samples[..., :-1]
-        upper_lim = x_samples[..., 1:]
-        mid_point = lower_lim + (upper_lim - lower_lim) / 2
-        int_points = torch.stack([lower_lim, mid_point, upper_lim], dim=-1)
-        f = func(int_points.flatten(-2, -1)).reshape(self.wavefront.n_samples,
-                                                     3, -1, 3)
-        A = torch.stack([torch.ones_like(int_points), int_points,
-                         int_points**2.0], dim=-1)
-        coeffs = torch.linalg.solve(A, f)
-        moment_0th = self.sin_moment(omega, int_points[..., ::2])
-        moment_1st = self.x_sin_moment(omega, int_points[..., ::2])
-        moment_2nd = self.x2_sin_moment(omega, int_points[..., ::2])
-        return torch.sum(coeffs[..., 0] * moment_0th
-                         + coeffs[..., 1] * moment_1st
-                         + coeffs[..., 2] * moment_2nd, dim=-1)
+        low_point = x_samples[..., :-1]
+        high_point = x_samples[..., 1:]
+        h = (high_point - low_point) / 2
+        mid_point = low_point + h
+        w0 = 1 / (2 * h**2.0) * (mid_point * high_point
+                * self.sin_moment(omega, low_point, high_point)
+                - (mid_point + high_point)
+                * self.x_sin_moment(omega, low_point, high_point)
+                + self.x2_sin_moment(omega, low_point, high_point))
+        w1 = 1 / (2. * h**2.0) \
+             * (-2. * low_point * high_point
+                * self.sin_moment(omega, low_point, high_point)
+                + (4. * mid_point)
+                * self.x_sin_moment(omega, low_point, high_point)
+                - 2. * self.x2_sin_moment(omega, low_point, high_point))
+        w2 = 1 / (2. * h**2.0) \
+             * (low_point * mid_point
+                * self.sin_moment(omega, low_point, high_point)
+                - (low_point + mid_point)
+                * self.x_sin_moment(omega, low_point, high_point)
+                + self.x2_sin_moment(omega, low_point, high_point))
+        f0 = func(low_point)
+        f1 = func(mid_point)
+        f2 = func(high_point)
+        return torch.sum(w0 * f0 + w1 * f1 + w2 * f2, dim=-1)
 
     def filon_cos(self, func, omega, x_samples):
         """
@@ -297,95 +302,109 @@ class EdgeRadSolver:
         :param x_samples: Sample points of integration.
         :return: Integration result.
         """
-        # Create sample point array
-        lower_lim = x_samples[..., :-1]
-        upper_lim = x_samples[..., 1:]
-        mid_point = lower_lim + (upper_lim - lower_lim) / 2
-        int_points = torch.stack([lower_lim, mid_point, upper_lim], dim=-1)
-        f = func(int_points.flatten(-2, -1)).reshape(self.wavefront.n_samples,
-                                                     3, -1, 3)
-        A = torch.stack([torch.ones_like(int_points), int_points,
-                         int_points**2.0], dim=-1)
-        coeffs = torch.linalg.solve(A, f)
-        moment_0th = self.cos_moment(omega, int_points[..., ::2])
-        moment_1st = self.x_cos_moment(omega, int_points[..., ::2])
-        moment_2nd = self.x2_cos_moment(omega, int_points[..., ::2])
-        return torch.sum(coeffs[..., 0] * moment_0th
-                         + coeffs[..., 1] * moment_1st
-                         + coeffs[..., 2] * moment_2nd, dim=-1)
+        low_point = x_samples[..., :-1]
+        high_point = x_samples[..., 1:]
+        h = (high_point - low_point) / 2
+        mid_point = low_point + h
+        w0 = 1 / (2 * h**2.0) * (mid_point * high_point
+                * self.cos_moment(omega, low_point, high_point)
+                - (mid_point + high_point)
+                * self.x_cos_moment(omega, low_point, high_point)
+                + self.x2_cos_moment(omega, low_point, high_point))
+        w1 = 1 / (2. * h**2.0) \
+             * (-2. * low_point * high_point
+                * self.cos_moment(omega, low_point, high_point)
+                + (4. * mid_point)
+                * self.x_cos_moment(omega, low_point, high_point)
+                - 2. * self.x2_cos_moment(omega, low_point, high_point))
+        w2 = 1 / (2. * h**2.0) \
+             * (low_point * mid_point
+                * self.cos_moment(omega, low_point, high_point)
+                - (low_point + mid_point)
+                * self.x_cos_moment(omega, low_point, high_point)
+                + self.x2_cos_moment(omega, low_point, high_point))
+        f0 = func(low_point)
+        f1 = func(mid_point)
+        f2 = func(high_point)
+        return torch.sum(w0 * f0 + w1 * f1 + w2 * f2, dim=-1)
 
     @staticmethod
-    def sin_moment(omega, x_lim):
+    def sin_moment(omega, x_low, x_high):
         """
         :param omega: Oscillation frequency
-        :param x_lim: Integration limits [xi, xf]
+        :param x_low: Lower integration limit
+        :param x_high Upper integration limit
         :return: Zeroth moment [sin(omega x)]
         """
-        return (torch.cos(omega * x_lim[..., 0])
-                - torch.cos(omega * x_lim[..., 1])) / omega
+        return (torch.cos(omega * x_low)
+                - torch.cos(omega * x_high)) / omega
 
     @staticmethod
-    def x_sin_moment(omega, x_lim):
+    def x_sin_moment(omega, x_low, x_high):
         """
         :param omega: Oscillation frequency
-        :param x_lim: Integration limits [xi, xf]
+        :param x_low: Lower integration limit
+        :param x_high Upper integration limit
         :return: First moment [x sin(omega x)]
         """
-        return (torch.sin(omega * x_lim[..., 1]) - x_lim[..., 1] * omega
-                * torch.cos(omega * x_lim[..., 1])
-                - torch.sin(omega * x_lim[..., 0]) + x_lim[..., 0] * omega
-                * torch.cos(omega * x_lim[..., 0])) / omega**2
+        return (torch.sin(omega * x_high) - x_high * omega
+                * torch.cos(omega * x_high)
+                - torch.sin(omega * x_low) + x_low * omega
+                * torch.cos(omega * x_low)) / omega**2
 
     @staticmethod
-    def x2_sin_moment(omega, x_lim):
+    def x2_sin_moment(omega, x_low, x_high):
         """
         :param omega: Oscillation frequency
-        :param x_lim: Integration limits [xi, xf]
+        :param x_low: Lower integration limit
+        :param x_high Upper integration limit
         :return: Second moment [x^2 sin(omega x)]
         """
-        return ((2 - x_lim[..., 1]**2 * omega**2)
-                * torch.cos(omega * x_lim[..., 1]) + 2 * omega * x_lim[..., 1]
-                * torch.sin(omega * x_lim[..., 1])
-                - (2 - x_lim[..., 0]**2 * omega**2)
-                * torch.cos(omega * x_lim[..., 0]) - 2 * omega * x_lim[..., 0]
-                * torch.sin(omega * x_lim[..., 0])) / omega**3.0
+        return ((2 - x_high**2 * omega**2)
+                * torch.cos(omega * x_high) + 2 * omega * x_high
+                * torch.sin(omega * x_high)
+                - (2 - x_low**2 * omega**2)
+                * torch.cos(omega * x_low) - 2 * omega * x_low
+                * torch.sin(omega * x_low)) / omega**3.0
 
     @staticmethod
-    def cos_moment(omega, x_lim):
+    def cos_moment(omega, x_low, x_high):
         """
         :param omega: Oscillation frequency
-        :param x_lim: Integration limits [xi, xf]
+        :param x_low: Lower integration limit
+        :param x_high Upper integration limit
         :return: Zeroth moment [cos(omega x)]
         """
-        return (torch.sin(omega * x_lim[..., 1])
-                - torch.sin(omega * x_lim[..., 0])) / omega
+        return (torch.sin(omega * x_high)
+                - torch.sin(omega * x_low)) / omega
 
     @staticmethod
-    def x_cos_moment(omega, x_lim):
+    def x_cos_moment(omega, x_low, x_high):
         """
         :param omega: Oscillation frequency
-        :param x_lim: Integration limits [xi, xf]
+        :param x_low: Lower integration limit
+        :param x_high Upper integration limit
         :return: First moment [x cos(omega x)]
         """
-        return (torch.cos(omega * x_lim[..., 1]) + x_lim[..., 1] * omega
-                * torch.sin(omega * x_lim[..., 1])
-                - torch.cos(omega * x_lim[..., 0]) - x_lim[..., 0] * omega
-                * torch.sin(omega * x_lim[..., 0])) / omega**2
+        return (torch.cos(omega * x_high) + x_high * omega
+                * torch.sin(omega * x_high)
+                - torch.cos(omega * x_low) - x_low * omega
+                * torch.sin(omega * x_low)) / omega**2
 
     @staticmethod
-    def x2_cos_moment(omega, x_lim):
+    def x2_cos_moment(omega, x_low, x_high):
         """
         :param omega: Oscillation frequency
-        :param x_lim: Integration limits [xi, xf]
+        :param x_low: Lower integration limit
+        :param x_high Upper integration limit
         :return: Second moment [x^2 cos(omega x)]
         """
-        return ((x_lim[..., 1]**2 * omega**2 - 2)
-                * torch.sin(omega * x_lim[..., 1]) + 2 * omega * x_lim[..., 1]
-                * torch.cos(omega * x_lim[..., 1])
-                - (x_lim[..., 0]**2 * omega**2 - 2)
-                * torch.sin(omega * x_lim[..., 0]) - 2 * omega * x_lim[..., 0]
-                * torch.cos(omega * x_lim[..., 0])) / omega**3.0
-
+        return ((x_high**2 * omega**2 - 2)
+                * torch.sin(omega * x_high) + 2 * omega * x_high
+                * torch.cos(omega * x_high)
+                - (x_low**2 * omega**2 - 2)
+                * torch.sin(omega * x_low) - 2 * omega * x_low
+                * torch.cos(omega * x_low)) / omega**3.0
 
 class SplineInterp:
     """
@@ -428,7 +447,7 @@ class SplineInterp:
              (self.x[..., 1:] - self.x[..., :-1]))
         m = torch.cat([m[..., [0]], (m[..., 1:] + m[..., :-1]) / 2,
                        m[..., [-1]]], dim=-1)
-        idx = torch.searchsorted(self.x[..., 1:].contiguous(), xs)
+        idx = torch.searchsorted(self.x[..., 1:].contiguous(), xs.contiguous())
         dx = (torch.gather(self.x, dim=-1, index=idx+1)
               - torch.gather(self.x, dim=-1, index=idx))
         hh = self.h_poly((xs - torch.gather(self.x, dim=-1, index=idx)) / dx)
@@ -439,20 +458,17 @@ class SplineInterp:
 
 
 if __name__ == "__main__":
-    print(print(torch.__version__))
-    print(torch.version.cuda)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    #device = "cpu"
-    print(device)
+    device = "cpu"
 
     track = Track("./track.npy", device=device)
-    print(track.time[0], track.time[-1])
     wavefnt = Wavefront(1.7526625849289021, 3.77e6,
                         [-0.01, 0.01, -0.01, 0.01],
-                        [50, 50], device=device)
-
+                        [150, 150], device=device)
     slvr = EdgeRadSolver(wavefnt, track)
-    cProfile.run("slvr.solve(0, 10, 1000)")
+    slvr.auto_res()
+    cProfile.run("slvr.solve()")
+
     wavefnt.plot_intensity()
     plt.show()
 
