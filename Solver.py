@@ -27,7 +27,7 @@ class EdgeRadSolver:
         self.wavefront = wavefront
         self.track = track
 
-    def auto_res(self, sample_x=300, ds_windows=200, ds_min=3):
+    def auto_res(self, sample_x=None, ds_windows=200, ds_min=2):
         """
         Automatically down-samples the track based on large values of
         objective function obj = |grad(1/grad(g))|. Where g(t) is the phase
@@ -36,10 +36,12 @@ class EdgeRadSolver:
         :param ds_windows: Number of windows in which the path is down sampled
         :param ds_min: log10 of minimum down sampling factor
         """
-        # TODO: Make auto_res work with torch
 
+        if not sample_x:
+            sample_x = self.wavefront.x_axis.shape[0]
+
+        # Store initial samples to print reduction
         init_samples = self.track.time.shape[0]
-
         # Calculate grad(1/ grad(phi)) at sample_x points.
         test_index = int(self.wavefront.x_axis.shape[0] / sample_x
                          * self.wavefront.n_samples_xy[0])
@@ -51,6 +53,7 @@ class EdgeRadSolver:
         inv_phase_grad = 1 / phase_grad
         grad_inv_grad = torch.gradient(torch.squeeze(inv_phase_grad),
                                        spacing=(self.track.time,), dim=1)[0]
+        print(grad_inv_grad.shape)
         obj_val, _ = torch.max(torch.abs(grad_inv_grad), dim=0)
 
         # Calculate mean objective value in windows
@@ -83,7 +86,8 @@ class EdgeRadSolver:
         r_list = [r[::int(10**window_ds_fact[i])]
                   for i, r in enumerate(r_list)]
         self.track.r = torch.cat(r_list).T
-        print("Reduction factor: ", init_samples / self.track.time.shape[0])
+        print("auto_res reduction factor: ", init_samples /
+              self.track.time.shape[0])
 
     def solve(self):
         """
@@ -92,19 +96,6 @@ class EdgeRadSolver:
         :param t_start: Stat time of integration (ns)
         :param t_end: End time of
         :param n_int: Number of sample in integration
-        """
-
-        # TODO: Make checks work with torch
-        """
-        # check that t_start and t_end are acceptable
-        f_interp = interpolate.interp1d(self.track.time, self.track.r[2])
-        if t_start < self.track.time[0] or t_start > self.track.time[-1]:
-            raise Exception(f"Integration boundaries must be within provided "
-                            f"track. Track boundaries are"
-                            f" {self.track.time[0]}  and {self.track.time[-1]}")
-        if f_interp(t_end) > self.wavefront.z:
-            raise Exception(f"Particle is beyond wavefront z at t_end."
-                            f" z pos at time {t_end} is {f_interp(t_end)}")
         """
 
         # Calculate observation points
@@ -120,98 +111,17 @@ class EdgeRadSolver:
                                                     dim=1)[0], dim=1)
 
         # Now calculate integrand samples
-        int1_samples = (self.track.beta - n_dir) / (r_norm * phase_grad)
-        int2_samples = c_light * n_dir / (self.wavefront.omega * r_norm ** 2.0
+        int1 = (self.track.beta - n_dir) / (r_norm * phase_grad)
+        int2 = c_light * n_dir / (self.wavefront.omega * r_norm ** 2.0
                                           * phase_grad)
         # Repeat phase along r axis for interpolation
-        phase = phase.repeat(1, 3, 1)
-        int1_func = SplineInterp(phase, int1_samples)
-        int2_func = SplineInterp(phase, int2_samples)
-        real_part = (self.filon_cos(int1_func, self.wavefront.omega, phase)
-                     + self.filon_sin(int2_func, self.wavefront.omega,
-                                      phase))
-        imag_part = (self.filon_sin(int1_func, self.wavefront.omega, phase)
-                     - self.filon_cos(int2_func, self.wavefront.omega,
-                                      phase))
+        real_part = (self.filon_cos(phase, int1, self.wavefront.omega)
+                     + self.filon_sin(phase, int2, self.wavefront.omega))
+        imag_part = (self.filon_sin(phase, int1, self.wavefront.omega)
+                     - self.filon_cos(phase, int2, self.wavefront.omega))
 
         self.wavefront.field = (real_part + 1j * imag_part).reshape(
             self.wavefront.n_samples_xy[0], self.wavefront.n_samples_xy[1], 3)
-
-
-
-        """
-        # loop through wavefront array
-        for i, xi in enumerate(self.wavefront.x_axis):
-            print(i)
-            for j, yj in enumerate(self.wavefront.y_axis):
-                r_obs = np.array([xi, yj, self.wavefront.z])[:, None] \
-                        - self.track.r
-                r_norm = np.linalg.norm(r_obs, axis=0)
-
-                # Calc phase / gradient
-                phase_samples = self.track.time + r_norm / c_light
-                phase_samples = phase_samples - phase_samples[0]
-                phase_grad = np.gradient(phase_samples, self.track.time)
-
-                # Phase function
-                phase_func = interpolate.InterpolatedUnivariateSpline(
-                    self.track.time, phase_samples, k=2)
-
-                # Form integrand function (f / gp)
-                n_dir_samples = r_obs / r_norm
-                int1_samples = (self.track.beta - n_dir_samples) \
-                    / (r_norm * phase_grad)
-                int2_samples = c_light * n_dir_samples \
-                    / (self.wavefront.omega * r_norm**2.0
-                       * phase_grad)
-
-                int1_func = interpolate.InterpolatedUnivariateSpline(
-                    phase_samples, int1_samples, k=2)
-                int2_func = interpolate.InterpolatedUnivariateSpline(
-                    phase_samples, int2_samples, k=2)
-                phase_int = phase_func(t_int_points)
-
-
-                fig, ax = plt.subplots()
-                ax.scatter(t_int_points, phase_int)
-                fig, ax = plt.subplots()
-                ax.scatter(t_int_points, int1_func(phase_int))
-                ax.plot(self.track.time, int1_func(phase_samples))
-                fig, ax = plt.subplots()
-                ax.plot(self.track.time, int2_func(phase_samples))
-                ax.scatter(t_int_points, int2_func(phase_int))
-                fig, ax = plt.subplots()
-                plt.scatter(self.track.time, 1/ phase_grad)
-                plt.show()
-
-
-                # Perform real and imaginary integrals
-                real_part = self.filon_cos(int1_func, self.wavefront.omega,
-                                           phase_int) + \
-                            self.filon_sin(int2_func, self.wavefront.omega,
-                                           phase_int)
-                imag_part = self.filon_sin(int1_func, self.wavefront.omega,
-                                           phase_int) - \
-                            self.filon_cos(int2_func, self.wavefront.omega,
-                                           phase_int)
-                # need to add phase part from integration variable change
-                centre = (real_part + 1j * imag_part) * np.exp(1j *
-                                self.wavefront.omega * phase_samples[0])
-                # Get the edge term
-                start_edge_real, start_edge_imag = self.solve_edge(
-                    self.track.time[0], self.track.time[0],
-                    self.track.beta[:, 0], r_obs[:, 0],
-                    self.wavefront.omega)
-                end_edge_real, end_edge_imag = self.solve_edge(
-                    self.track.time[end_index], self.track.time[end_index],
-                    self.track.beta[:, end_index], r_obs[:, end_index],
-                    self.wavefront.omega)
-                edge = (start_edge_real[index] - end_edge_real[index]
-                        + (start_edge_imag[index] - end_edge_imag[index])
-                        * 1j)
-
-                self.wavefront.field[index, i, j] = centre# + edge
-        """
 
     @staticmethod
     def solve_edge(t, t_0, beta_0, r_0, omega):
@@ -256,76 +166,58 @@ class EdgeRadSolver:
                 imag_part * np.cos(omega * phase)
                 + real_part * np.sin(omega * phase))
 
-    def filon_sin(self, func, omega, x_samples):
+    def filon_sin(self, x_samples, f_samples, omega):
         """
         Filon based method for integrating function multiplied by a rapidly
         oscillating sine wave. I = int[f(x) sin(omega x)], omega >> 1. Uses a
         quadratic approximation for f(x), allowing I to be solved analytically.
-        :param func: Function to be integrated, f(x).
-        :param omega: Oscillation frequency.
         :param x_samples: Sample points of integration.
+        :param f_samples: Samples of non-oscillating function
+        :param omega: Oscillation frequency.
         :return: Integration result.
         """
-        low_point = x_samples[..., :-1]
-        high_point = x_samples[..., 1:]
-        h = (high_point - low_point) / 2
-        mid_point = low_point + h
-        w0 = 1 / (2 * h**2.0) * (mid_point * high_point
-                * self.sin_moment(omega, low_point, high_point)
-                - (mid_point + high_point)
-                * self.x_sin_moment(omega, low_point, high_point)
-                + self.x2_sin_moment(omega, low_point, high_point))
-        w1 = 1 / (2. * h**2.0) \
-             * (-2. * low_point * high_point
-                * self.sin_moment(omega, low_point, high_point)
-                + (4. * mid_point)
-                * self.x_sin_moment(omega, low_point, high_point)
-                - 2. * self.x2_sin_moment(omega, low_point, high_point))
-        w2 = 1 / (2. * h**2.0) \
-             * (low_point * mid_point
-                * self.sin_moment(omega, low_point, high_point)
-                - (low_point + mid_point)
-                * self.x_sin_moment(omega, low_point, high_point)
-                + self.x2_sin_moment(omega, low_point, high_point))
-        f0 = func(low_point)
-        f1 = func(mid_point)
-        f2 = func(high_point)
+        x0 = x_samples[..., :-2:2]
+        x1 = x_samples[..., 1:-1:2]
+        x2 = x_samples[..., 2::2]
+        j0 = self.sin_moment(omega, x0, x2)
+        j1 = self.x_sin_moment(omega, x0, x2)
+        j2 = self.x2_sin_moment(omega, x0, x2)
+        f0 = f_samples[..., :-2:2]
+        f1 = f_samples[..., 1:-1:2]
+        f2 = f_samples[..., 2::2]
+        w0 = (x1 * x2 * j0 - x1 * j1 - x2 * j1 + j2) \
+            / ((x0 - x1) * (x0 - x2))
+        w1 = (x0 * x2 * j0 - x0 * j1 - x2 * j1 + j2) \
+            / ((x1 - x0) * (x1 - x2))
+        w2 = (x0 * (j1 - x1 * j0) + x1 * j1 - j2) \
+            / ((x0 - x2) * (x2 - x1))
         return torch.sum(w0 * f0 + w1 * f1 + w2 * f2, dim=-1)
 
-    def filon_cos(self, func, omega, x_samples):
+    def filon_cos(self, x_samples, f_samples, omega):
         """
         Filon based method for integrating function multiplied by a rapidly
         oscillating cosine wave. I = int[f(x) cos(omega x)], omega >> 1. Uses a
         quadratic approximation for f(x), allowing I to be solved analytically.
-        :param func: Function to be integrated, f(x).
-        :param omega: Oscillation frequency.
         :param x_samples: Sample points of integration.
+        :param f_samples: Samples of non-oscillating function
+        :param omega: Oscillation frequency.
         :return: Integration result.
         """
-        low_point = x_samples[..., :-1]
-        high_point = x_samples[..., 1:]
-        h = (high_point - low_point) / 2
-        mid_point = low_point + h
-        w0 = 1 / (2 * h**2.0) * (mid_point * high_point
-                * self.cos_moment(omega, low_point, high_point)
-                - (mid_point + high_point)
-                * self.x_cos_moment(omega, low_point, high_point)
-                + self.x2_cos_moment(omega, low_point, high_point))
-        w1 = 1 / (2. * h**2.0) \
-             * (-2. * low_point * high_point
-                * self.cos_moment(omega, low_point, high_point)
-                + (4. * mid_point)
-                * self.x_cos_moment(omega, low_point, high_point)
-                - 2. * self.x2_cos_moment(omega, low_point, high_point))
-        w2 = 1 / (2. * h**2.0) \
-             * (low_point * mid_point
-                * self.cos_moment(omega, low_point, high_point)
-                - (low_point + mid_point)
-                * self.x_cos_moment(omega, low_point, high_point)
-                + self.x2_cos_moment(omega, low_point, high_point))
-        f0 = func(low_point)
-        f1 = func(mid_point)
-        f2 = func(high_point)
+        x0 = x_samples[..., :-2:2]
+        x1 = x_samples[..., 1:-1:2]
+        x2 = x_samples[..., 2::2]
+        j0 = self.cos_moment(omega, x0, x2)
+        j1 = self.x_cos_moment(omega, x0, x2)
+        j2 = self.x2_cos_moment(omega, x0, x2)
+        f0 = f_samples[..., :-2:2]
+        f1 = f_samples[..., 1:-1:2]
+        f2 = f_samples[..., 2::2]
+        w0 = (x1 * x2 * j0 - x1 * j1 - x2 * j1 + j2) \
+            / ((x0 - x1) * (x0 - x2))
+        w1 = (x0 * x2 * j0 - x0 * j1 - x2 * j1 + j2) \
+            / ((x1 - x0) * (x1 - x2))
+        w2 = (x0 * (j1 - x1 * j0) + x1 * j1 - j2) \
+            / ((x0 - x2) * (x2 - x1))
         return torch.sum(w0 * f0 + w1 * f1 + w2 * f2, dim=-1)
 
     @staticmethod
@@ -406,56 +298,6 @@ class EdgeRadSolver:
                 * torch.sin(omega * x_low) - 2 * omega * x_low
                 * torch.cos(omega * x_low)) / omega**3.0
 
-class SplineInterp:
-    """
-    Cubic spline interpolator class using pytorch. Can perform multiple
-    interpolations along batch dimension.
-    """
-
-    def __init__(self, x, y):
-        """
-        :param x: x samples
-        :param y: y samples
-        """
-        self.x = x
-        self.y = y
-        self.device = x.device
-        self.A = torch.tensor([
-            [1, 0, -3, 2],
-            [0, 1, -2, 1],
-            [0, 0, 3, -2],
-            [0, 0, -1, 1]],
-            dtype=x.dtype, device=self.device)
-
-    def h_poly(self, x):
-        """
-        Calculates the Hermite polynomials
-        :param x: Locations to calculate polynomials at
-        :return: Hermite polynomials
-        """
-        xx = x[..., None, :] ** torch.arange(
-            4, device=self.device)[..., :, None]
-        return torch.matmul(self.A, xx)
-
-    def __call__(self, xs):
-        """
-        Performs interpolation at location xs.
-        :param xs: locations to interpolate
-        :return: Interpolated value
-        """
-        m = ((self.y[..., 1:] - self.y[..., :-1]) /
-             (self.x[..., 1:] - self.x[..., :-1]))
-        m = torch.cat([m[..., [0]], (m[..., 1:] + m[..., :-1]) / 2,
-                       m[..., [-1]]], dim=-1)
-        idx = torch.searchsorted(self.x[..., 1:].contiguous(), xs.contiguous())
-        dx = (torch.gather(self.x, dim=-1, index=idx+1)
-              - torch.gather(self.x, dim=-1, index=idx))
-        hh = self.h_poly((xs - torch.gather(self.x, dim=-1, index=idx)) / dx)
-        return (hh[..., 0, :] * torch.gather(self.y, dim=-1, index=idx)
-                + hh[..., 1, :] * torch.gather(m, dim=-1, index=idx)
-                * dx + hh[..., 2, :] * torch.gather(self.y, dim=-1, index=idx+1)
-                + hh[..., 3, :] * torch.gather(m, dim=-1, index=idx+1) * dx)
-
 
 if __name__ == "__main__":
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -464,11 +306,12 @@ if __name__ == "__main__":
     track = Track("./track.npy", device=device)
     wavefnt = Wavefront(1.7526625849289021, 3.77e6,
                         [-0.01, 0.01, -0.01, 0.01],
-                        [150, 150], device=device)
+                        [50, 50], device=device)
     slvr = EdgeRadSolver(wavefnt, track)
     slvr.auto_res()
-    cProfile.run("slvr.solve()")
+    slvr.solve()
 
     wavefnt.plot_intensity()
+    print(torch.sum(wavefnt.field))
     plt.show()
 
