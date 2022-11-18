@@ -5,25 +5,32 @@ import matplotlib.pyplot as plt
 
 class Track:
     """
-    Class which handles the central electron beam track. Currently, this just
-    loads a numpy array from an SRW simulation. I will add an RK4 solver soon.
+    Class which handles the central electron beam track.
     """
 
     def __init__(self, track_file, device=None):
         """
-        :param track_file: SRW file containing particle track
         :param device: Device being used (cpu / gpu)
         """
         # Load from track file
-        self.track = np.load(track_file)
-        time = self.track[0]
-        r = self.track[1:4]
-        beta = self.track[4:]
+        self.device = device
+        self.time = None
+        self.r = None
+        self.beta = None
 
-        # Convert to pytorch
-        self.time = torch.tensor(time, device=device)
-        self.r = torch.tensor(r, device=device)
-        self.beta = torch.tensor(beta, device=device)
+    def load_track(self, track_file):
+        """
+        Loads track from external simulation
+        :param track_file: Numpy array containing track information. In format:
+         [time, r, beta]
+        """
+        track = np.load(track_file)
+        time = track[0]
+        r = track[1:4]
+        beta = track[4:]
+        self.time = torch.tensor(time, device=self.device)
+        self.r = torch.tensor(r, device=self.device)
+        self.beta = torch.tensor(beta, device=self.device)
 
     def plot_track(self, axes):
         """
@@ -35,3 +42,11 @@ class Track:
         ax.plot(self.r[:, axes[0]].cpu().detach().numpy(),
                 self.r[:, axes[1]].cpu().detach().numpy())
         return fig, ax
+
+    def set_magnets(self):
+        pass
+
+    def sim_track(self):
+        pass
+
+

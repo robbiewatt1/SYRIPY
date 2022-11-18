@@ -1,13 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy import interpolate
-import cProfile
 from Track import Track
 from Wavefront import Wavefront
-import time
-import os
 import torch
-from torch.profiler import profile, record_function, ProfilerActivity
 
 
 c_light = 0.29979245
@@ -19,19 +14,21 @@ class EdgeRadSolver:
     particle trajectory.
     """
 
-    def __init__(self, wavefront, track):
+    def __init__(self, wavefront, track, device=None):
         """
         :param wavefront: Instance of Wavefront class
         :param track: Instance of Track class
+
         """
         self.wavefront = wavefront
         self.track = track
+        self.device = device
 
-    def auto_res(self, sample_x=None, ds_windows=200, ds_min=2):
+    def auto_res(self, sample_x=None, ds_windows=100, ds_min=3):
         """
         Automatically down-samples the track based on large values of
         objective function obj = |grad(1/grad(g))|. Where g(t) is the phase
-        function.
+        function. Takes sample along x dimension at y=0.
         :param sample_x: Number of test sample points in x
         :param ds_windows: Number of windows in which the path is down sampled
         :param ds_min: log10 of minimum down sampling factor
@@ -43,9 +40,13 @@ class EdgeRadSolver:
         # Store initial samples to print reduction
         init_samples = self.track.time.shape[0]
         # Calculate grad(1/ grad(phi)) at sample_x points.
-        test_index = int(self.wavefront.x_axis.shape[0] / sample_x
-                         * self.wavefront.n_samples_xy[0])
-        r_obs = self.wavefront.coords[::test_index, :, None] - self.track.r
+        start_index = int((self.wavefront.n_samples -
+                           self.wavefront.n_samples_xy[0]) / 2)
+        end_index = int((self.wavefront.n_samples +
+                         self.wavefront.n_samples_xy[0]) / 2)
+        r_obs = self.wavefront.coords[start_index:end_index, :, None] - \
+                self.track.r
+
         r_norm = torch.linalg.norm(r_obs, dim=1)
         phase_samples = self.track.time[None, :] + r_norm / c_light
         phase_grad = torch.gradient(phase_samples,
@@ -53,14 +54,14 @@ class EdgeRadSolver:
         inv_phase_grad = 1 / phase_grad
         grad_inv_grad = torch.gradient(torch.squeeze(inv_phase_grad),
                                        spacing=(self.track.time,), dim=1)[0]
-        print(grad_inv_grad.shape)
+
         obj_val, _ = torch.max(torch.abs(grad_inv_grad), dim=0)
 
         # Calculate mean objective value in windows
         window_shape = (-1, int(obj_val.shape[0] / ds_windows))
         obj_val_windows, _ = torch.max(obj_val.reshape(window_shape), dim=1)
 
-        # Calculate the log10 down-sampling factor for each window
+        # Calculate the down-sampling factor for each window
         window_ds_fact = -torch.log10(obj_val_windows
                                       / torch.max(obj_val_windows))
         # Clip down sampling at min value
@@ -89,39 +90,47 @@ class EdgeRadSolver:
         print("auto_res reduction factor: ", init_samples /
               self.track.time.shape[0])
 
-    def solve(self):
+    def solve(self, blocks=1):
         """
         Main function to solve the radiation field at the wavefront.
         Interaction limits must be within time array of track
-        :param t_start: Stat time of integration (ns)
-        :param t_end: End time of
-        :param n_int: Number of sample in integration
+        :param blocks: Number of blocks to split calculation. Increasing this
+         will reduce memory but slow calculation
         """
 
-        # Calculate observation points
-        r_obs = self.wavefront.coords[..., None] - self.track.r
-        r_norm = torch.linalg.norm(r_obs, dim=1, keepdim=True)
-        n_dir = r_obs / r_norm
+        # Check array divides evenly into blocks
+        if self.wavefront.coords.shape[0] % blocks != 0:
+            raise Exception("Observation array does not divide evenly into "
+                            f"blocks. {self.wavefront.coords.shape[0]} "
+                            f"observation points and {blocks} blocks.")
 
-        # Calculate the phase function and gradient
-        phase = self.track.time + r_norm / c_light
-        phase = phase - phase[..., 0, None]
-        phase_grad = torch.unsqueeze(torch.gradient(torch.squeeze(phase),
-                                                    spacing=(self.track.time,),
-                                                    dim=1)[0], dim=1)
+        # Loop blocks and perform calculation
+        block_size = int(self.wavefront.coords.shape[0] / blocks)
+        for i in range(blocks):
+            # start and end index of block
+            bi = block_size * i
+            bf = block_size * (i + 1)
 
-        # Now calculate integrand samples
-        int1 = (self.track.beta - n_dir) / (r_norm * phase_grad)
-        int2 = c_light * n_dir / (self.wavefront.omega * r_norm ** 2.0
-                                          * phase_grad)
-        # Repeat phase along r axis for interpolation
-        real_part = (self.filon_cos(phase, int1, self.wavefront.omega)
-                     + self.filon_sin(phase, int2, self.wavefront.omega))
-        imag_part = (self.filon_sin(phase, int1, self.wavefront.omega)
-                     - self.filon_cos(phase, int2, self.wavefront.omega))
+            # Calculate observation points
+            r_obs = self.wavefront.coords[bi:bf, :, None] - self.track.r
+            r_norm = torch.linalg.norm(r_obs, dim=1, keepdim=True)
+            n_dir = r_obs / r_norm
 
-        self.wavefront.field = (real_part + 1j * imag_part).reshape(
-            self.wavefront.n_samples_xy[0], self.wavefront.n_samples_xy[1], 3)
+            # Calculate the phase function and gradient
+            phase = self.track.time + r_norm / c_light
+            phase = phase - phase[..., 0, None]
+            phase_grad = torch.unsqueeze(
+                torch.gradient(torch.squeeze(phase), spacing=(self.track.time,),
+                               dim=1)[0], dim=1)
+            # Now calculate integrand samples
+            int1 = (self.track.beta - n_dir) / (r_norm * phase_grad)
+            int2 = c_light * n_dir / (self.wavefront.omega * r_norm**2.0
+                                      * phase_grad)
+            real_part = (self.filon_cos(phase, int1, self.wavefront.omega)
+                         + self.filon_sin(phase, int2, self.wavefront.omega))
+            imag_part = (self.filon_sin(phase, int1, self.wavefront.omega)
+                         - self.filon_cos(phase, int2, self.wavefront.omega))
+            self.wavefront.field[bi:bf] = (real_part + 1j * imag_part)
 
     @staticmethod
     def solve_edge(t, t_0, beta_0, r_0, omega):
@@ -300,18 +309,19 @@ class EdgeRadSolver:
 
 
 if __name__ == "__main__":
+    # Todo Make the calulcation single precision
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    device = "cpu"
-
+    device = "cuda"
     track = Track("./track.npy", device=device)
+
     wavefnt = Wavefront(1.7526625849289021, 3.77e6,
-                        [-0.01, 0.01, -0.01, 0.01],
-                        [50, 50], device=device)
+                        [-0.02, 0.02, -0.02, 0.02],
+                        [1000, 1000], device=device)
+    print("start")
     slvr = EdgeRadSolver(wavefnt, track)
     slvr.auto_res()
-    slvr.solve()
-
+    slvr.solve(16)
     wavefnt.plot_intensity()
-    print(torch.sum(wavefnt.field))
     plt.show()
+
 
