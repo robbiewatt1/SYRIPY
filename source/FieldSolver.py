@@ -312,15 +312,16 @@ if __name__ == "__main__":
     # Todo Make the calulcation single precision
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     device = "cuda"
-    track = Track("./track.npy", device=device)
+    track = Track(device=device)
+    track.load_file("./track.npy")
 
     wavefnt = Wavefront(1.7526625849289021, 3.77e6,
-                        [-0.02, 0.02, -0.02, 0.02],
-                        [1000, 1000], device=device)
+                        [-0.01, 0.01, -0.01, 0.01],
+                        [200, 200], device=device)
     print("start")
     slvr = EdgeRadSolver(wavefnt, track)
     slvr.auto_res()
-    slvr.solve(16)
+    slvr.solve(1)
     wavefnt.plot_intensity()
     plt.show()
 

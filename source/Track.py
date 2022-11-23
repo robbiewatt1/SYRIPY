@@ -3,12 +3,13 @@ import torch
 import matplotlib.pyplot as plt
 
 
+
 class Track:
     """
     Class which handles the central electron beam track.
     """
 
-    def __init__(self, track_file, device=None):
+    def __init__(self, device=None):
         """
         :param device: Device being used (cpu / gpu)
         """
@@ -18,7 +19,7 @@ class Track:
         self.r = None
         self.beta = None
 
-    def load_track(self, track_file):
+    def load_file(self, track_file):
         """
         Loads track from external simulation
         :param track_file: Numpy array containing track information. In format:
