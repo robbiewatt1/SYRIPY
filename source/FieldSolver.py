@@ -8,7 +8,7 @@ import torch
 c_light = 0.29979245
 
 
-class EdgeRadSolver:
+class EdgeRadSolver(torch.nn.Module):
     """
     Class which solves the Liénard–Wiechert field at a wavefront for a given
     particle trajectory.
@@ -20,10 +20,12 @@ class EdgeRadSolver:
         :param track: Instance of Track class
 
         """
+        super().__init__()
         self.wavefront = wavefront
         self.track = track
         self.device = device
 
+    @torch.jit.export
     def auto_res(self, sample_x=None, ds_windows=100, ds_min=3):
         """
         Automatically down-samples the track based on large values of
@@ -114,8 +116,7 @@ class EdgeRadSolver:
             # Calculate observation points
             r_obs = self.wavefront.coords[bi:bf, :, None] - self.track.r
             r_norm = torch.linalg.norm(r_obs, dim=1, keepdim=True)
-            n_dir = r_obs / r_norm
-
+            n_dir = r_obs[:, :2, :] / r_norm
             # Calculate the phase function and gradient
             phase = self.track.time + r_norm / c_light
             phase = phase - phase[..., 0, None]
@@ -123,7 +124,7 @@ class EdgeRadSolver:
                 torch.gradient(torch.squeeze(phase), spacing=(self.track.time,),
                                dim=1)[0], dim=1)
             # Now calculate integrand samples
-            int1 = (self.track.beta - n_dir) / (r_norm * phase_grad)
+            int1 = (self.track.beta[:2, :] - n_dir) / (r_norm * phase_grad)
             int2 = c_light * n_dir / (self.wavefront.omega * r_norm**2.0
                                       * phase_grad)
             real_part = (self.filon_cos(phase, int1, self.wavefront.omega)
@@ -319,8 +320,12 @@ if __name__ == "__main__":
                         [-0.01, 0.01, -0.01, 0.01],
                         [200, 200], device=device)
     print("start")
+
+
     slvr = EdgeRadSolver(wavefnt, track)
-    slvr.auto_res()
+    scripted_module = torch.jit.script(slvr)
+
+    scripted_module.auto_res()
     slvr.solve(1)
     wavefnt.plot_intensity()
     plt.show()

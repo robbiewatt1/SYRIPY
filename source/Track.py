@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 
 
 
-class Track:
+class Track(torch.nn.Module):
     """
     Class which handles the central electron beam track.
     """
@@ -13,6 +13,7 @@ class Track:
         """
         :param device: Device being used (cpu / gpu)
         """
+        super().__init__()
         # Load from track file
         self.device = device
         self.time = None
