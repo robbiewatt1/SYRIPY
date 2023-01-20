@@ -22,14 +22,14 @@ class Wavefront(torch.nn.Module):
         self.n_samples_xy = n_samples_xy
         self.device = device
         self.n_samples = n_samples_xy[0] * n_samples_xy[1]
+        self.delta = [(wf_bounds[1] - wf_bounds[0]) / n_samples_xy[0],
+                      (wf_bounds[3] - wf_bounds[2]) / n_samples_xy[1]]
         self.x_axis = torch.linspace(wf_bounds[0], wf_bounds[1],
                                      n_samples_xy[0], device=device)
         self.y_axis = torch.linspace(wf_bounds[2], wf_bounds[3],
                                      n_samples_xy[1], device=device)
         self.x_array, self.y_array = torch.meshgrid(self.x_axis, self.y_axis,
-                                                    indexing="xy")
-
-        # Create coordinate array
+                                                    indexing="ij")
         self.coords = torch.stack((self.x_array, self.y_array,
                                    z * torch.ones_like(self.x_array)),
                                   dim=2).flatten(0, 1)
@@ -52,7 +52,7 @@ class Wavefront(torch.nn.Module):
         self.y_axis = torch.linspace(self.wf_bounds[2], self.wf_bounds[3],
                                      self.n_samples_xy[1], device=self.device)
         self.x_array, self.y_array = torch.meshgrid(self.x_axis, self.y_axis,
-                                                    indexing="xy")
+                                                    indexing="ij")
         self.coords = torch.stack((self.x_array, self.y_array,
                                    self.z * torch.ones_like(self.x_array)),
                                   dim=2).flatten(0, 1)
@@ -76,7 +76,7 @@ class Wavefront(torch.nn.Module):
         self.y_axis = torch.linspace(self.wf_bounds[2], self.wf_bounds[3],
                                      self.n_samples_xy[1], device=self.device)
         self.x_array, self.y_array = torch.meshgrid(self.x_axis, self.y_axis,
-                                                    indexing="xy")
+                                                    indexing="ij")
         self.coords = torch.stack((self.x_array, self.y_array,
                                    self.z * torch.ones_like(self.x_array)),
                                   dim=2).flatten(0, 1)
@@ -88,8 +88,8 @@ class Wavefront(torch.nn.Module):
         """
         intensity = (torch.abs(self.field[:, 0])**2.0
                      + torch.abs(self.field[:, 1])**2.0).cpu().detach().numpy()
-        intensity = intensity.reshape(self.n_samples_xy[1],
-                                      self.n_samples_xy[0])
+        intensity = intensity.reshape(self.n_samples_xy[0],
+                                      self.n_samples_xy[1]).T
         fig, ax = plt.subplots()
 
         if log_plot:
@@ -101,8 +101,7 @@ class Wavefront(torch.nn.Module):
         else:
             pcol = ax.pcolormesh(self.x_axis.cpu().detach().numpy()[::ds_fact],
                                  self.y_axis.cpu().detach().numpy()[::ds_fact],
-                                 intensity[::ds_fact, ::ds_fact]
-                                 / (np.max(intensity)), vmin=0, vmax=1,
+                                 intensity[::ds_fact, ::ds_fact],
                                  cmap="jet")
             fig.colorbar(pcol)
 
