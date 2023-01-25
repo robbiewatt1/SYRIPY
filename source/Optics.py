@@ -61,8 +61,8 @@ class RayleighSommerfeldProp(OpticalElement):
         plt.show()
         field = wavefront.field.reshape(wavefront.n_samples_xy[0],
                                         wavefront.n_samples_xy[1], 2)
-        field = fft.fftshift(fft.fft2(field, dim=(0, 1)), dim=(0, 1))
-        new_field = fft.ifft2(fft.ifftshift(field * tran_func[:, :, None],
+        field = fft.fft2(fft.fftshift(field, dim=(0, 1)), dim=(0, 1))
+        new_field = fft.ifftshift(fft.ifft2(field * tran_func[:, :, None],
                                             dim=(0, 1)), dim=(0, 1))
         wavefront.field = new_field.flatten(0, 1)
         wavefront.z = wavefront.z + self.z
@@ -101,8 +101,8 @@ class FresnelProp(OpticalElement):
         tran_func = torch.exp(torch.tensor(1j * wave_k * self.z)) * tran_func
         field = wavefront.field.reshape(wavefront.n_samples_xy[0],
                                         wavefront.n_samples_xy[1], 2)
-        field = fft.fftshift(fft.fft2(field, dim=(0, 1)), dim=(0, 1))
-        new_field = fft.ifft2(fft.ifftshift(field * tran_func[:, :, None],
+        field = fft.fft2(fft.fftshift(field, dim=(0, 1)), dim=(0, 1))
+        new_field = fft.ifftshift(fft.ifft2(field * tran_func[:, :, None],
                                             dim=(0, 1)), dim=(0, 1))
         wavefront.field = new_field.flatten(0, 1)
         wavefront.z = wavefront.z + self.z
@@ -167,6 +167,65 @@ class FraunhoferProp(OpticalElement):
         wavefront.update_bounds(prop_bounds)
 
 
+class DebyeProp(OpticalElement):
+    """
+    Propagates the wavefront to the focus of a lens using the Debye-wolf method.
+    The field extent cannot be larger than a circle of radius focal_length.
+    """
+
+    def __init__(self, focal_length, aper_radius=None):
+        """
+        :param focal_length: Focal length of lens.
+        :param aper_radius: Radius of aperture before lens.
+        """
+        if aper_radius and aper_radius > focal_length:
+            raise Exception("aper_radius must be smaller than focal length")
+
+        self.focal_length = focal_length
+        if not aper_radius:
+            self.num_aper = focal_length
+
+    def propagate(self, wavefront):
+        """
+        Propagates wavefront. Aperture is applied first to avoid complex
+        wave-vector
+        :param wavefront: Wavefront to be propagated.
+        """
+
+        k0 = wavefront.omega / c_light
+        lambd = 2.0 * torch.pi / k0
+        kx = k0 * wavefront.x_axis / self.focal_length
+        ky = k0 * wavefront.y_axis / self.focal_length
+        kx, ky = torch.meshgrid(kx, ky, indexing="ij")
+        kr = (kx**2. + ky**2.)**0.5
+        # The abs here avoids complex wave-vectors. Field should be zeros
+        # when k0^2 - kr^2 is negative so shouldn't matter
+        kz = torch.abs(k0**2. - kr**2.)**0.5
+
+        # Form conv kernels
+        G_x = (k0 / kz)**0.5 * (k0 * ky**2. + kz * kx**2.) / (k0 * kr**2.)
+        G_y = (k0 / kz)**0.5 * (kz - k0) * kx * kz / (k0 * kr**2.)
+        G_z = -(k0 / kz)**0.5 * kx / k0
+        G_tx = torch.stack((G_x, G_y, G_z)).permute(1, 2, 0)
+        G_ty = torch.stack((-1*G_y, G_x, G_z)).permute(1, 2, 0)
+        field = wavefront.field.reshape(wavefront.n_samples_xy[0],
+                                        wavefront.n_samples_xy[1], 2)
+
+        # TODO Might need to do some roations for y
+        # TODO Need to add * torch.exp(1j * kz * self.focal_length) *
+
+
+        # Do x pol component
+        field_x = fft.ifftshift(fft.ifft2(G_tx * field[:, :, 0, None],
+                                          dim=(0, 1)), dim=(0, 1))
+        field_y = fft.ifftshift(fft.ifft2(G_ty * field[:, :, 1, None],
+                                          dim=(0, 1)), dim=(0, 1))
+
+        wavefront.field = (field_y + field_x).flatten(0, 1)
+        Wavefront.dims = 3
+        wavefront.z = wavefront.z + self.focal_length
+
+
 class ThinLens(OpticalElement):
 
     def __init__(self, focal_length):
@@ -191,38 +250,19 @@ class CircularAperture(OpticalElement):
 
 
 
-
-
-
 if __name__ == "__main__":
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     track = Track(device=device)
     track.load_file("./track.npy")
     wavefnt = Wavefront(0, 3.77e6,
-                        np.array([-0.051, 0.051, -0.051, 0.051]),
-                        np.array([100, 100]), device=device)
-
-    wavefnt.field[:, 1] = 1
-    wavefnt.pad_wavefront(5)
-    free_space_prop = FresnelProp(2000)
-    free_space_prop.propagate(wavefnt)
+                        np.array([-0.03, 0.03, -0.031, 0.031]),
+                        np.array([50, 50]), 2, device=device)
+    wavefnt.field[:, 0] = 1
+    aper = CircularAperture(0.03)
+    aper.propagate(wavefnt)
+    wavefnt.pad_wavefront(20)
     wavefnt.plot_intensity()
-
-    wavefnt = Wavefront(0, 3.77e6,
-                        np.array([-0.0001, 0.0001, -0.0001, 0.0001]),
-                        np.array([100, 100]), device=device)
-
-    wavefnt.field[:, 1] = 1
-    wavefnt.pad_wavefront(2)
-    free_space_prop = RayleighSommerfeldProp(0.1)
-    free_space_prop.propagate(wavefnt)
+    prop = DebyeProp(0.1)
+    prop.propagate(wavefnt)
     wavefnt.plot_intensity()
-
-    """
-
-    wavefnt.plot_intensity(ds_fact=32)#log_plot=False, axes_lim=[-8e-5, 8e-5,
-    # -8e-5,
-    # 8e-5])
-    
-    """
     plt.show()

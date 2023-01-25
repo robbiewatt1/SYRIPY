@@ -7,12 +7,15 @@ class Wavefront(torch.nn.Module):
     """
     Wavefront class containing complex field array.
     """
-    def __init__(self, z, omega, wf_bounds, n_samples_xy, device=None):
+    def __init__(self, z, omega, wf_bounds, n_samples_xy, dims=2,
+                 device=None):
         """
         :param z: Longitudinal position of wavefront
         :param omega: Frequency of radiation
         :param wf_bounds: Bounds of wavefront [xmin, xmax, ymin, ymax]
         :param n_samples_xy: Samples in wavefront [n_x, n_y]
+        :param dims: Polarisation dimensions of field.  (dims = 2 -> (x, y)
+            3 -> (x, y, z))
         :param device: Device being used (e.g. cpu / gpu)
         """
         super().__init__()
@@ -20,6 +23,7 @@ class Wavefront(torch.nn.Module):
         self.omega = omega
         self.wf_bounds = wf_bounds
         self.n_samples_xy = n_samples_xy
+        self.dims = dims
         self.device = device
         self.n_samples = n_samples_xy[0] * n_samples_xy[1]
         self.delta = [(wf_bounds[1] - wf_bounds[0]) / n_samples_xy[0],
@@ -33,9 +37,8 @@ class Wavefront(torch.nn.Module):
         self.coords = torch.stack((self.x_array, self.y_array,
                                    z * torch.ones_like(self.x_array)),
                                   dim=2).flatten(0, 1)
-        self.field = torch.zeros((self.n_samples, 2), dtype=torch.cfloat,
+        self.field = torch.zeros((self.n_samples, dims), dtype=torch.cfloat,
                                  device=device)
-        print(self.coords.get_device(), self.y_array.get_device(), self.field.get_device())
 
     def pad_wavefront(self, pad_fact=2):
         """
@@ -56,13 +59,14 @@ class Wavefront(torch.nn.Module):
         self.coords = torch.stack((self.x_array, self.y_array,
                                    self.z * torch.ones_like(self.x_array)),
                                   dim=2).flatten(0, 1)
-        new_field = torch.zeros((self.n_samples_xy[0], self.n_samples_xy[1], 2),
-                                dtype=torch.cfloat, device=self.device)
+        new_field = torch.zeros((self.n_samples_xy[0], self.n_samples_xy[1],
+                                 self.dims), dtype=torch.cfloat,
+                                device=self.device)
         new_field[self.n_samples_xy[0] // 2 - x_size_old // 2:
                   self.n_samples_xy[0] // 2 + x_size_old // 2,
                   self.n_samples_xy[1] // 2 - y_size_old // 2:
                   self.n_samples_xy[1] // 2 + y_size_old // 2, :] \
-            = self.field.reshape(x_size_old, y_size_old, 2)
+            = self.field.reshape(x_size_old, y_size_old, self.dims)
         self.field = new_field.flatten(0, 1)
 
     def update_bounds(self, bounds):
@@ -81,17 +85,52 @@ class Wavefront(torch.nn.Module):
                                    self.z * torch.ones_like(self.x_array)),
                                   dim=2).flatten(0, 1)
 
+    def change_dims(self, new_dims):
+        """
+        Changes dimensions of the wavefront. If decreasing dims then z / y
+            axis is removed in that order
+        :param new_dims: New dimensions of the wavefront
+        """
+
+        new_field = torch.zeros((self.n_samples, new_dims),
+                                dtype=torch.cfloat,
+                                device=self.device).flatten(0, 1)
+        if self.dims == 1:
+            new_field[:, 0] = self.field
+        elif self.dims == 2:
+            if new_dims == 1:
+                new_field[:, 0] = self.field[:, 0]
+            elif new_dims == 3:
+                new_field[:, :2] = self.field
+        elif self.dims == 3:
+            if new_dims == 1:
+                new_field[:, 0] = self.field[:, 0]
+            elif new_dims == 2:
+                new_field[:, :2] = self.field
+        self.field = new_field
+        self.dims = new_dims
+
     def plot_intensity(self, log_plot=False, axes_lim=None, ds_fact=1):
         """
         Plots the intensity of the wavefront.
         :return: (fig, ax)
         """
-        intensity = (torch.abs(self.field[:, 0])**2.0
-                     + torch.abs(self.field[:, 1])**2.0).cpu().detach().numpy()
+        if self.dims == 1:
+            intensity = (torch.abs(self.field[:, 0]) ** 2.0
+                         ).cpu().detach().numpy()
+        elif self.dims == 2:
+            intensity = (torch.abs(self.field[:, 0])**2.0 +
+                         torch.abs(self.field[:, 1])**2.0
+                         ).cpu().detach().numpy()
+        elif self.dims == 3:
+            intensity = (torch.abs(self.field[:, 0])**2.0 +
+                         torch.abs(self.field[:, 1])**2.0 +
+                         torch.abs(self.field[:, 2])**2.0
+                         ).cpu().detach().numpy()
         intensity = intensity.reshape(self.n_samples_xy[0],
                                       self.n_samples_xy[1]).T
-        fig, ax = plt.subplots()
 
+        fig, ax = plt.subplots()
         if log_plot:
             pcol = ax.pcolormesh(self.x_axis.cpu().detach().numpy()[::ds_fact],
                                  self.y_axis.cpu().detach().numpy()[::ds_fact],
