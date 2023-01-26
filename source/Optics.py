@@ -1,12 +1,15 @@
 import torch
 import torch.fft as fft
 import numpy as np
+import cmath
 from Wavefront import Wavefront
 
 # Remove these after checks
 from FieldSolver import EdgeRadSolver
 from Track import Track
 import matplotlib.pyplot as plt
+from scipy.signal import ZoomFFT
+
 
 c_light = 0.29979245
 
@@ -249,6 +252,34 @@ class CircularAperture(OpticalElement):
         wavefront.field = wavefront.field * mask
 
 
+def chirp_z_1d(n, m, f_lims, fs):
+    """
+    1D chirp Z transform function. Generalisation of a DFT that can have
+    different sampling in the input and output space. Good for focusing
+    simulations where the radiation is concentrated into a small area.
+    This is just copied from scipy but implemented using torch.
+    :param n: Dimension of input array.
+    :param m: Dimension of output array.
+
+    """
+    # out full dim
+    k = np.arange(np.max(m, n))
+
+    # Normilised out sizer
+    scale = (f_lims[1] - f_lims[0]) / fs
+
+    # Starting value
+    a = cmath.exp(2j * np.pi * f_lims[0] / fs)
+    # ratio
+    w = cmath.exp(-2j * np.pi / m * scale)
+
+    wk2 = np.exp(-(1j * np.pi * scale * k ** 2) / m)
+    awk2 = np.exp(-2j * np.pi * f_lims[0]/fs * k[:n]) * wk2[:n]
+
+    nfft = 2 ** np.ceil(np.log(m + n - 1) / np.log(2))
+    Fwk2 = fft(1 / np.hstack((wk2[n-1:0:-1], wk2[:m])), nfft)
+    print(Fwk2.shape)
+
 
 if __name__ == "__main__":
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -257,7 +288,9 @@ if __name__ == "__main__":
     wavefnt = Wavefront(0, 3.77e6,
                         np.array([-0.03, 0.03, -0.031, 0.031]),
                         np.array([50, 50]), 2, device=device)
-    wavefnt.field[:, 0] = 1
+    ChirpZ()
+    """
+    avefnt.field[:, 0] = 1
     aper = CircularAperture(0.03)
     aper.propagate(wavefnt)
     wavefnt.pad_wavefront(20)
@@ -266,3 +299,4 @@ if __name__ == "__main__":
     prop.propagate(wavefnt)
     wavefnt.plot_intensity()
     plt.show()
+    """
