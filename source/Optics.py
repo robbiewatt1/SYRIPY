@@ -8,7 +8,7 @@ from Wavefront import Wavefront
 from FieldSolver import EdgeRadSolver
 from Track import Track
 import matplotlib.pyplot as plt
-from scipy.signal import ZoomFFT
+import matplotlib
 
 
 c_light = 0.29979245
@@ -252,34 +252,83 @@ class CircularAperture(OpticalElement):
         wavefront.field = wavefront.field * mask
 
 
-def chirp_z_1d(n, m, f_lims, fs):
+def chirp_z_1d(x, m, f_lims, fs, endpoint=True, power_2=True):
     """
     1D chirp Z transform function. Generalisation of a DFT that can have
     different sampling in the input and output space. Good for focusing
-    simulations where the radiation is concentrated into a small area.
+    simulations where the radiation is concentrated on a small area.
     This is just copied from scipy but implemented using torch.
-    :param n: Dimension of input array.
+    :param x: Input signal array. If multidimensional, the last
     :param m: Dimension of output array.
-
+    :param f_lims: Frequency limits [f0, f1].
+    :param fs: Total length of output space.
+    :param endpoint: If true, f_lims[1] is included.
+    :param power_2: If true, array will be padded before fft to power of 2
+    for maximum efficiency
+    :return y: Transformed result
     """
+
     # out full dim
-    k = np.arange(np.max(m, n))
+    n = x.shape[-1]
+    k = torch.arange(max(m, n), device=x.device)
 
-    # Normilised out sizer
-    scale = (f_lims[1] - f_lims[0]) / fs
+    if endpoint:
+        scale = ((f_lims[1] - f_lims[0]) * m) / (fs * (m - 1))
+    else:
+        scale = (f_lims[1] - f_lims[0]) / fs
 
-    # Starting value
-    a = cmath.exp(2j * np.pi * f_lims[0] / fs)
-    # ratio
-    w = cmath.exp(-2j * np.pi / m * scale)
+    wk2 = torch.exp(-(1j * np.pi * scale * k ** 2) / m)
+    awk2 = torch.exp(-2j * np.pi * f_lims[0]/fs * k[:n]) * wk2[:n]
 
-    wk2 = np.exp(-(1j * np.pi * scale * k ** 2) / m)
-    awk2 = np.exp(-2j * np.pi * f_lims[0]/fs * k[:n]) * wk2[:n]
+    if power_2:
+        nfft = int(2 ** np.ceil(np.log(m + n - 1) / np.log(2)))
+    else:
+        nfft = m + n - 1
 
-    nfft = 2 ** np.ceil(np.log(m + n - 1) / np.log(2))
-    Fwk2 = fft(1 / np.hstack((wk2[n-1:0:-1], wk2[:m])), nfft)
-    print(Fwk2.shape)
+    fwk2 = torch.fft.fft(1 / torch.hstack(
+        (torch.flip(wk2[1:n], dims=[-1]), wk2[:m])), nfft)
+    wk2 = wk2[:m]
+    y = torch.fft.ifft(fwk2 * torch.fft.fft(x * awk2, nfft))
+    y = y[..., slice(n - 1, n + m - 1)] * wk2
+    return y
 
+
+def chirp_z_2d(x, m, f_lims, fs, endpoint=True, power_2=True):
+    """
+    2D chirp Z transform function. Performs the transform on the last two
+    dimensions of x. We apply the 1d function along the inner dimension then
+    flip and do the second.
+    :param x: 2d signal array.
+    :param m: Dimension of output array [mx, my].
+    :param f_lims: Frequency limits [fx0, fx1
+    :param fs: Total length of output space [fsx, fsy].
+    :param endpoint: If true, f_lims[1] / fimits[3] are included.
+    :param power_2: If true, array will be padded before fft to power of 2
+    :return y: Transformed result
+    """
+
+    y = chirp_z_1d(x, m[1], [f_lims[2], f_lims[3]], fs[1], endpoint, power_2)
+    y = chirp_z_1d(torch.swapaxes(y, -1, -2), m[0], [f_lims[0], f_lims[1]],
+                   fs[0], endpoint, power_2)
+    return torch.swapaxes(y, -1, -2)
+
+
+def test(device):
+    x_axis = torch.linspace(-1, 1, 100, device=device)
+
+    x_array, y_array = torch.meshgrid(x_axis, x_axis, indexing="ij")
+    r_array = (x_array**2. + y_array**2.)**0.5
+    y = torch.where(r_array < 0.5, 1, 0)
+
+    yz = chirp_z_2d(y, [500, 500], [-10, 10, -10, 10], [50, 50])
+
+    fig, ax = plt.subplots()
+    ax.pcolormesh((torch.abs(yz)**2.0).cpu(), norm=matplotlib.colors.LogNorm())
+
+    fig, ax = plt.subplots()
+    ax.pcolormesh((torch.abs(torch.fft.ifftshift(torch.fft.fft2(fft.fftshift(
+        y)))**2.0).cpu()), norm=matplotlib.colors.LogNorm())
+    plt.show()
 
 if __name__ == "__main__":
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -287,8 +336,8 @@ if __name__ == "__main__":
     track.load_file("./track.npy")
     wavefnt = Wavefront(0, 3.77e6,
                         np.array([-0.03, 0.03, -0.031, 0.031]),
-                        np.array([50, 50]), 2, device=device)
-    ChirpZ()
+                        np.array([10, 10]), 2, device=device)
+    test(device)
     """
     avefnt.field[:, 0] = 1
     aper = CircularAperture(0.03)
