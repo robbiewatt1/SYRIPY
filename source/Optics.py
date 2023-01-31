@@ -8,7 +8,7 @@ from Wavefront import Wavefront
 from FieldSolver import EdgeRadSolver
 from Track import Track
 import matplotlib.pyplot as plt
-from scipy.signal import ZoomFFT
+import matplotlib
 
 
 c_light = 0.29979245
@@ -58,16 +58,11 @@ class RayleighSommerfeldProp(OpticalElement):
         fx, fy = torch.meshgrid(fx, fy, indexing="ij")
         tran_func = torch.exp(1j * 2. * torch.pi * self.z
                               * (1. / lambd**2. - fx**2. - fy**2.)**0.5)
-        fig, ax = plt.subplots()
-        ax.pcolormesh(((1. - lambd**2 * fx**2. - lambd**2 *
-        fy**2.)**0.5).cpu())
-        plt.show()
-        field = wavefront.field.reshape(wavefront.n_samples_xy[0],
-                                        wavefront.n_samples_xy[1], 2)
-        field = fft.fft2(fft.fftshift(field, dim=(0, 1)), dim=(0, 1))
-        new_field = fft.ifftshift(fft.ifft2(field * tran_func[:, :, None],
-                                            dim=(0, 1)), dim=(0, 1))
-        wavefront.field = new_field.flatten(0, 1)
+        field = wavefront.field.reshape(2, wavefront.n_samples_xy[0],
+                                        wavefront.n_samples_xy[1])
+        field = fft.fft2(fft.fftshift(field))
+        new_field = fft.ifftshift(fft.ifft2(field * tran_func[None, :, :]))
+        wavefront.field = new_field.flatten(1, 2)
         wavefront.z = wavefront.z + self.z
 
 
@@ -102,12 +97,11 @@ class FresnelProp(OpticalElement):
         tran_func = torch.exp(-1j * torch.pi * lambd * self.z
                               * (fx**2. + fy**2))
         tran_func = torch.exp(torch.tensor(1j * wave_k * self.z)) * tran_func
-        field = wavefront.field.reshape(wavefront.n_samples_xy[0],
-                                        wavefront.n_samples_xy[1], 2)
-        field = fft.fft2(fft.fftshift(field, dim=(0, 1)), dim=(0, 1))
-        new_field = fft.ifftshift(fft.ifft2(field * tran_func[:, :, None],
-                                            dim=(0, 1)), dim=(0, 1))
-        wavefront.field = new_field.flatten(0, 1)
+        field = wavefront.field.reshape(2, wavefront.n_samples_xy[0],
+                                        wavefront.n_samples_xy[1])
+        field = fft.fft2(fft.fftshift(field))
+        new_field = fft.ifftshift(fft.ifft2(field * tran_func[None, :, :]))
+        wavefront.field = new_field.flatten(1, 2)
         wavefront.z = wavefront.z + self.z
 
 
@@ -159,13 +153,13 @@ class FraunhoferProp(OpticalElement):
         c = 1 / (1j * lambd * self.z) \
             * torch.exp(1j * wave_k / (2. * self.z) * (x_new_mesh**2. +
                                                        y_new_mesh**2.))
-        field = wavefront.field.reshape(wavefront.n_samples_xy[0],
-                                        wavefront.n_samples_xy[1], 2)
-        new_field = c[:, :, None] * torch.fft.ifftshift(torch.fft.fft2(
-            torch.fft.fftshift(field, dim=(0, 1)), dim=(0, 1)), dim=(0, 1))
+        field = wavefront.field.reshape(2, wavefront.n_samples_xy[0],
+                                        wavefront.n_samples_xy[1])
+        new_field = c[None, :, :] * torch.fft.ifftshift(torch.fft.fft2(
+            torch.fft.fftshift(field)))
 
         # Update bounds / field
-        wavefront.field = new_field.flatten(0, 1)
+        wavefront.field = new_field.flatten(1, 2)
         wavefront.z = wavefront.z + self.z
         wavefront.update_bounds(prop_bounds)
 
@@ -188,15 +182,46 @@ class DebyeProp(OpticalElement):
         if not aper_radius:
             self.num_aper = focal_length
 
-    def propagate(self, wavefront):
+    def propagate(self, wavefront, pad=None, new_shape=None,
+                  new_bounds=None, calc_z=False):
         """
         Propagates wavefront. Aperture is applied first to avoid complex
-        wave-vector
+        wave-vector. If new_shape / new_bounds is set then a czt is used
+        rather than a fourier transform. CZT does not need padding.
         :param wavefront: Wavefront to be propagated.
+        :param pad: Int setting padding amount. Default is none
+        :param new_shape: Gives the shape of the output wavefront if using
+        CZT transform [nx, ny]
+        :param new_bounds: Gives the boundes og the output wavefront if using
+        CTZ transform [xmin, xmax, ymin, ymax].
+        :param calc_z: If true, the z component of the field will also be
+        calculated (usually small).
         """
+
+        if new_shape and new_bounds:
+            use_czt = True
+        elif bool(new_shape) ^ bool(new_bounds):
+            use_czt = False
+            print("Both new_shape and new_bounds must be defined to use czt. "
+                  "Resorting back to fft.")
+        else:
+            use_czt = False
 
         k0 = wavefront.omega / c_light
         lambd = 2.0 * torch.pi / k0
+        # First sort the new bounds
+        delta_x = (wavefront.wf_bounds[1] - wavefront.wf_bounds[0]) \
+                  / wavefront.n_samples_xy[0]
+        delta_y = (wavefront.wf_bounds[3] - wavefront.wf_bounds[2])\
+                  / wavefront.n_samples_xy[1]
+        full_out_size = [lambd * self.focal_length / delta_x,
+                         lambd * self.focal_length / delta_y]
+        if not use_czt:
+            new_bounds = [-0.5 * full_out_size[0],
+                          0.5 * full_out_size[0],
+                          -0.5 * full_out_size[1],
+                          0.5 * full_out_size[1]]
+
         kx = k0 * wavefront.x_axis / self.focal_length
         ky = k0 * wavefront.y_axis / self.focal_length
         kx, ky = torch.meshgrid(kx, ky, indexing="ij")
@@ -206,27 +231,35 @@ class DebyeProp(OpticalElement):
         kz = torch.abs(k0**2. - kr**2.)**0.5
 
         # Form conv kernels
-        G_x = (k0 / kz)**0.5 * (k0 * ky**2. + kz * kx**2.) / (k0 * kr**2.)
-        G_y = (k0 / kz)**0.5 * (kz - k0) * kx * kz / (k0 * kr**2.)
-        G_z = -(k0 / kz)**0.5 * kx / k0
-        G_tx = torch.stack((G_x, G_y, G_z)).permute(1, 2, 0)
-        G_ty = torch.stack((-1*G_y, G_x, G_z)).permute(1, 2, 0)
-        field = wavefront.field.reshape(wavefront.n_samples_xy[0],
-                                        wavefront.n_samples_xy[1], 2)
-
+        g_x = (k0 / kz)**0.5 * (k0 * ky**2. + kz * kx**2.) / (k0 * kr**2.)
+        g_y = (k0 / kz)**0.5 * (kz - k0) * kx * kz / (k0 * kr**2.)
+        g_z = -(k0 / kz)**0.5 * kx / k0
+        g_tx = torch.stack((g_x, g_y, g_z))
+        g_ty = torch.stack((-1*g_y, g_x, g_z))
+        field = wavefront.field.reshape(2, wavefront.n_samples_xy[0],
+                                        wavefront.n_samples_xy[1])
         # TODO Might need to do some roations for y
-        # TODO Need to add * torch.exp(1j * kz * self.focal_length) *
 
+        if use_czt:
+            field_x = chirp_z_2d(g_tx * field[None, :, :], new_shape,
+                                 new_bounds, full_out_size)
+            field_y = chirp_z_2d(g_ty * field[None, :, :], new_shape,
+                                 new_bounds, full_out_size)
+        else:
+            print(g_tx.shape, field.shape)
+            field_x = fft.ifftshift(fft.ifft2(g_tx * field[None, :, :, 0]))
+            field_y = fft.ifftshift(fft.ifft2(g_ty * field[None, :, :, 1]))
 
-        # Do x pol component
-        field_x = fft.ifftshift(fft.ifft2(G_tx * field[:, :, 0, None],
-                                          dim=(0, 1)), dim=(0, 1))
-        field_y = fft.ifftshift(fft.ifft2(G_ty * field[:, :, 1, None],
-                                          dim=(0, 1)), dim=(0, 1))
-
-        wavefront.field = (field_y + field_x).flatten(0, 1)
-        Wavefront.dims = 3
         wavefront.z = wavefront.z + self.focal_length
+        if calc_z:
+            Wavefront.dims = 3
+            wavefront.field = (torch.exp(1j * kz * self.focal_length)
+                               * field_y + field_x).flatten(0, 1)
+        else:
+            print((torch.exp(1j * kz * self.focal_length)
+                               * (field_y + field_x)).shape)
+            wavefront.field = (torch.exp(1j * kz * self.focal_length)
+                               * (field_y + field_x)).flatten(0, 1)[..., [0, 1]]
 
 
 class ThinLens(OpticalElement):
@@ -236,7 +269,7 @@ class ThinLens(OpticalElement):
 
     def propagate(self, wavefront):
         tf = torch.exp(-1j * wavefront.omega / (2 * self.focal_length * c_light)
-                * (wavefront.coords[:, 0]**2.0 + wavefront.coords[:, 1]**2.0))
+                * (wavefront.coords[0, :]**2.0 + wavefront.coords[1, :]**2.0))
         wavefront.field = wavefront.field * tf
 
 
@@ -246,39 +279,70 @@ class CircularAperture(OpticalElement):
         self.radius = radius
 
     def propagate(self, wavefront):
-        r = (wavefront.coords[:, 0]**2.0 + wavefront.coords[:, 1]**2.0)**0.5
-        mask = torch.where(r < self.radius, 1, 0)[:, None]
-        print(r.get_device(), mask.device)
+        r = (wavefront.coords[0, :]**2.0 + wavefront.coords[1, :]**2.0)**0.5
+        mask = torch.where(r < self.radius, 1, 0)[None, :]
         wavefront.field = wavefront.field * mask
 
 
-def chirp_z_1d(n, m, f_lims, fs):
+def chirp_z_1d(x, m, f_lims, fs, endpoint=True, power_2=True):
     """
     1D chirp Z transform function. Generalisation of a DFT that can have
     different sampling in the input and output space. Good for focusing
-    simulations where the radiation is concentrated into a small area.
+    simulations where the radiation is concentrated on a small area.
     This is just copied from scipy but implemented using torch.
-    :param n: Dimension of input array.
+    :param x: Input signal array. If multidimensional, the last
     :param m: Dimension of output array.
-
+    :param f_lims: Frequency limits [f0, f1].
+    :param fs: Total length of output space.
+    :param endpoint: If true, f_lims[1] is included.
+    :param power_2: If true, array will be padded before fft to power of 2
+    for maximum efficiency
+    :return y: Transformed result
     """
+
     # out full dim
-    k = np.arange(np.max(m, n))
+    n = x.shape[-1]
+    k = torch.arange(max(m, n), device=x.device)
 
-    # Normilised out sizer
-    scale = (f_lims[1] - f_lims[0]) / fs
+    if endpoint:
+        scale = ((f_lims[1] - f_lims[0]) * m) / (fs * (m - 1))
+    else:
+        scale = (f_lims[1] - f_lims[0]) / fs
 
-    # Starting value
-    a = cmath.exp(2j * np.pi * f_lims[0] / fs)
-    # ratio
-    w = cmath.exp(-2j * np.pi / m * scale)
+    wk2 = torch.exp(-(1j * np.pi * scale * k ** 2) / m)
+    awk2 = torch.exp(-2j * np.pi * f_lims[0]/fs * k[:n]) * wk2[:n]
 
-    wk2 = np.exp(-(1j * np.pi * scale * k ** 2) / m)
-    awk2 = np.exp(-2j * np.pi * f_lims[0]/fs * k[:n]) * wk2[:n]
+    if power_2:
+        nfft = int(2 ** np.ceil(np.log(m + n - 1) / np.log(2)))
+    else:
+        nfft = m + n - 1
 
-    nfft = 2 ** np.ceil(np.log(m + n - 1) / np.log(2))
-    Fwk2 = fft(1 / np.hstack((wk2[n-1:0:-1], wk2[:m])), nfft)
-    print(Fwk2.shape)
+    fwk2 = torch.fft.fft(1 / torch.hstack(
+        (torch.flip(wk2[1:n], dims=[-1]), wk2[:m])), nfft)
+    wk2 = wk2[:m]
+    y = torch.fft.ifft(fwk2 * torch.fft.fft(x * awk2, nfft))
+    y = y[..., slice(n - 1, n + m - 1)] * wk2
+    return y
+
+
+def chirp_z_2d(x, m, f_lims, fs, endpoint=True, power_2=True):
+    """
+    2D chirp Z transform function. Performs the transform on the last two
+    dimensions of x. We apply the 1d function along the inner dimension then
+    flip and do the second.
+    :param x: 2d signal array.
+    :param m: Dimension of output array [mx, my].
+    :param f_lims: Frequency limits [fx0, fx1, fy0, fy1]
+    :param fs: Total length of output space [fsx, fsy].
+    :param endpoint: If true, f_lims[1] / fimits[3] are included.
+    :param power_2: If true, array will be padded before fft to power of 2
+    :return y: Transformed result
+    """
+
+    y = chirp_z_1d(x, m[1], [f_lims[2], f_lims[3]], fs[1], endpoint, power_2)
+    y = chirp_z_1d(torch.swapaxes(y, -1, -2), m[0], [f_lims[0], f_lims[1]],
+                   fs[0], endpoint, power_2)
+    return torch.swapaxes(y, -1, -2)
 
 
 if __name__ == "__main__":
@@ -287,16 +351,15 @@ if __name__ == "__main__":
     track.load_file("./track.npy")
     wavefnt = Wavefront(0, 3.77e6,
                         np.array([-0.03, 0.03, -0.031, 0.031]),
-                        np.array([50, 50]), 2, device=device)
-    ChirpZ()
-    """
-    avefnt.field[:, 0] = 1
+                        np.array([10, 10]), 2, device=device)
+
+    wavefnt.field[:, 0] = 1
     aper = CircularAperture(0.03)
     aper.propagate(wavefnt)
     wavefnt.pad_wavefront(20)
     wavefnt.plot_intensity()
+    
     prop = DebyeProp(0.1)
     prop.propagate(wavefnt)
     wavefnt.plot_intensity()
     plt.show()
-    """

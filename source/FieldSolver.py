@@ -4,6 +4,7 @@ from Track import Track
 from Wavefront import Wavefront
 import torch
 
+# Todo Change everything so that polarisation axis ios the first
 
 c_light = 0.29979245
 
