@@ -82,6 +82,8 @@ class FieldBlock:
         self.direction = direction
         self.edge_scaled = edge_length / (10**0.5 - 1)**0.5
         self.field_extent = field_extent * edge_length
+        self.bounds = [center_pos[2] - 0.5 * self.length - self.field_extent,
+                       center_pos[2] + 0.5 * self.length + self.field_extent]
 
     def get_field(self, position):
         """
@@ -144,7 +146,6 @@ class Dipole(FieldBlock):
         if zr < 0:
             return self.B0
         else:
-            print(zr)
             return self._fridge(self.B0, zr)
 
 
@@ -198,21 +199,37 @@ class FieldContainer:
         self.field_array = sorted(field_array,
                                   key=lambda field: field.center_pos[2])
 
-        # Create a boundary array
+        # Create a boundary array / index
         self.bounds = []
-
-
-
+        self.field_idx = [-1]
+        for i, field in enumerate(field_array):
+            self.bounds.extend(field.bounds)
+            self.field_idx.extend([i, -1])
 
     def get_field(self, position):
-        pass
+        """
+        Finds which element we are in and returns field
+        :param position: Position of particle
+        :return: Magnetic field vector.
+        """
+        # Do a linear search to fine which field we are in. If I ever need to
+        # add lots of elemets then a binary search will give O(log n)
+
+        index = 0
+        if index == -1:
+            return torch.tensor([0, 0, 0])
+        else:
+            return self.field_array[index].get_field(position)
+
+
+
 
 
 if __name__ == "__main__":
     test = Quadrupole(torch.tensor([0,0,0]), 1, 1, None, 0.5, 5)
     z = torch.linspace(-2, 2, 1000)
     x = torch.zeros_like(z) + 0.1
-    p = torch.stack([x,x,z]).T
+    p = torch.stack([x, x, z]).T
 
     f = torch.zeros(1000)
     for i in range(1000):

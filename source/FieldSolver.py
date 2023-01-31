@@ -25,8 +25,7 @@ class EdgeRadSolver(torch.nn.Module):
         self.track = track
         self.device = device
 
-    @torch.jit.export
-    def auto_res(self, sample_x=None, ds_windows=100, ds_min=3):
+    def auto_dt(self, sample_x=None, ds_windows=100, ds_min=3):
         """
         Automatically down-samples the track based on large values of
         objective function obj = |grad(1/grad(g))|. Where g(t) is the phase
@@ -35,6 +34,8 @@ class EdgeRadSolver(torch.nn.Module):
         :param ds_windows: Number of windows in which the path is down sampled
         :param ds_min: log10 of minimum down sampling factor
         """
+
+        # TODO change from down sampling time step to interpolating over path
 
         if not sample_x:
             sample_x = self.wavefront.x_axis.shape[0]
