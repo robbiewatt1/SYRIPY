@@ -93,7 +93,6 @@ class FresnelProp(OpticalElement):
                                       d=wavefront.delta[1],
                                       device=wavefront.device))
         fx, fy = torch.meshgrid(fx, fy, indexing="ij")
-
         tran_func = torch.exp(-1j * torch.pi * lambd * self.z
                               * (fx**2. + fy**2))
         tran_func = torch.exp(torch.tensor(1j * wave_k * self.z)) * tran_func
@@ -119,49 +118,61 @@ class FraunhoferProp(OpticalElement):
         """
         self.z = z
 
-    def propagate(self, wavefront, pad=None):
+    def propagate(self, wavefront, pad=None, new_shape=None,
+                  new_bounds=None):
         """
         Propogates wavefront.
         :param wavefront: Wavefront to be propagated.
         :param pad: Int setting padding amount. Default is none
+        :param new_shape: Gives the shape of the output wavefront if using
+        CZT transform [nx, ny]
+        :param new_bounds: Gives the bounds of the output wavefront if using
+        CTZ transform [xmin, xmax, ymin, ymax].
         """
 
         if pad:
             wavefront.pad_wavefront(pad)
 
+        if new_shape and new_bounds:
+            use_czt = True
+        elif bool(new_shape) ^ bool(new_bounds):
+            use_czt = False
+            print("Both new_shape and new_bounds must be defined to use czt. "
+                  "Resorting back to fft.")
+        else:
+            use_czt = False
+
         wave_k = wavefront.omega / c_light
         lambd = 2.0 * torch.pi / wave_k
+        delta_x = (wavefront.wf_bounds[1] - wavefront.wf_bounds[0]) \
+                  / wavefront.n_samples_xy[0]
+        delta_y = (wavefront.wf_bounds[3] - wavefront.wf_bounds[2])\
+                  / wavefront.n_samples_xy[1]
+        full_out_size = [lambd * self.z / delta_x, lambd * self.z / delta_y]
 
-        # Get new axes
-        deltaX_i = (wavefront.wf_bounds[1] - wavefront.wf_bounds[0]) \
-                   / wavefront.n_samples_xy[0]
-        deltaY_i = (wavefront.wf_bounds[3] - wavefront.wf_bounds[2]) \
-                   / wavefront.n_samples_xy[1]
-        prop_bounds = [-0.5 * lambd * self.z / deltaX_i,
-                       0.5 * lambd * self.z / deltaX_i,
-                       -0.5 * lambd * self.z / deltaY_i,
-                       0.5 * lambd * self.z / deltaY_i]
-        x_new = torch.linspace(prop_bounds[0], prop_bounds[1],
-                               wavefront.n_samples_xy[0],
-                               device=wavefront.device)
-        y_new = torch.linspace(prop_bounds[2], prop_bounds[3],
-                               wavefront.n_samples_xy[1],
-                               device=wavefront.device)
-        x_new_mesh, y_new_mesh = torch.meshgrid(x_new, y_new, indexing="ij")
+        if not use_czt:
+            new_bounds = [-0.5 * full_out_size[0],
+                          0.5 * full_out_size[0],
+                          -0.5 * full_out_size[1],
+                          0.5 * full_out_size[1]]
+            new_shape = wavefront.n_samples_xy
 
-        # Calculate new field
-        c = 1 / (1j * lambd * self.z) \
-            * torch.exp(1j * wave_k / (2. * self.z) * (x_new_mesh**2. +
-                                                       y_new_mesh**2.))
         field = wavefront.field.reshape(2, wavefront.n_samples_xy[0],
                                         wavefront.n_samples_xy[1])
-        new_field = c[None, :, :] * torch.fft.ifftshift(torch.fft.fft2(
-            torch.fft.fftshift(field)))
+        wavefront.update_bounds(new_bounds, new_shape)
+        c = 1. / (1j * lambd * self.z) \
+            * torch.exp(1j * wave_k / (2. * self.z)
+                        * (wavefront.x_array**2. + wavefront.y_array**2.))
 
-        # Update bounds / field
-        wavefront.field = new_field.flatten(1, 2)
+        if use_czt:
+            new_field = c[None, :, :] * chirp_z_2d(field, new_shape, new_bounds,
+                                                   full_out_size)
+        else:
+            new_field = c[None, :, :] * fft.ifftshift(fft.fft2(
+                torch.fft.fftshift(field)))
+
         wavefront.z = wavefront.z + self.z
-        wavefront.update_bounds(prop_bounds)
+        wavefront.field = new_field.flatten(1, 2)
 
 
 class DebyeProp(OpticalElement):
@@ -192,7 +203,7 @@ class DebyeProp(OpticalElement):
         :param pad: Int setting padding amount. Default is none
         :param new_shape: Gives the shape of the output wavefront if using
         CZT transform [nx, ny]
-        :param new_bounds: Gives the boundes og the output wavefront if using
+        :param new_bounds: Gives the bounds of the output wavefront if using
         CTZ transform [xmin, xmax, ymin, ymax].
         :param calc_z: If true, the z component of the field will also be
         calculated (usually small).
@@ -221,11 +232,12 @@ class DebyeProp(OpticalElement):
                           0.5 * full_out_size[0],
                           -0.5 * full_out_size[1],
                           0.5 * full_out_size[1]]
+            new_shape = wavefront.n_samples_xy
 
-        kx = k0 * wavefront.x_axis / self.focal_length
-        ky = k0 * wavefront.y_axis / self.focal_length
-        kx, ky = torch.meshgrid(kx, ky, indexing="ij")
+        kx = k0 * wavefront.x_array / self.focal_length
+        ky = k0 * wavefront.y_array / self.focal_length
         kr = (kx**2. + ky**2.)**0.5
+
         # The abs here avoids complex wave-vectors. Field should be zeros
         # when k0^2 - kr^2 is negative so shouldn't matter
         kz = torch.abs(k0**2. - kr**2.)**0.5
@@ -234,32 +246,42 @@ class DebyeProp(OpticalElement):
         g_x = (k0 / kz)**0.5 * (k0 * ky**2. + kz * kx**2.) / (k0 * kr**2.)
         g_y = (k0 / kz)**0.5 * (kz - k0) * kx * kz / (k0 * kr**2.)
         g_z = -(k0 / kz)**0.5 * kx / k0
-        g_tx = torch.stack((g_x, g_y, g_z))
-        g_ty = torch.stack((-1*g_y, g_x, g_z))
+        g_tx = torch.exp(1j * kz * self.focal_length) \
+               * torch.stack((g_x, g_y, g_z))
+        g_ty = torch.exp(1j * kz * self.focal_length) \
+               * torch.stack((-1*g_y, g_x, g_z))
         field = wavefront.field.reshape(2, wavefront.n_samples_xy[0],
                                         wavefront.n_samples_xy[1])
-        # TODO Might need to do some roations for y
+        # TODO Might need to do some rotations for y
+        fig, ax = plt.subplots()
+        pcol = ax.pcolormesh(torch.angle(g_tx[0]))
+        fig.colorbar(pcol)
+        fig, ax = plt.subplots()
+        pcol = ax.pcolormesh(torch.angle(g_tx[1]))
+        fig.colorbar(pcol)
+        fig, ax = plt.subplots()
+        pcol = ax.pcolormesh(torch.angle(g_tx[2]))
+        fig.colorbar(pcol)
+        plt.show()
 
         if use_czt:
-            field_x = chirp_z_2d(g_tx * field[None, :, :], new_shape,
+            field_x = chirp_z_2d(g_tx * field[0, :, :], new_shape,
                                  new_bounds, full_out_size)
-            field_y = chirp_z_2d(g_ty * field[None, :, :], new_shape,
+            field_y = chirp_z_2d(g_ty * field[1, :, :], new_shape,
                                  new_bounds, full_out_size)
         else:
-            print(g_tx.shape, field.shape)
-            field_x = fft.ifftshift(fft.ifft2(g_tx * field[None, :, :, 0]))
-            field_y = fft.ifftshift(fft.ifft2(g_ty * field[None, :, :, 1]))
+            field_x = fft.ifftshift(fft.ifft2(
+                torch.fft.fftshift(g_tx * field[0, :, :])))
+            field_y = fft.ifftshift(fft.ifft2(
+                torch.fft.fftshift(g_ty * field[1, :, :])))
 
         wavefront.z = wavefront.z + self.focal_length
+        wavefront.update_bounds(new_bounds, new_shape)
         if calc_z:
             Wavefront.dims = 3
-            wavefront.field = (torch.exp(1j * kz * self.focal_length)
-                               * field_y + field_x).flatten(0, 1)
+            wavefront.field = (field_x + field_y).flatten(1, 2)
         else:
-            print((torch.exp(1j * kz * self.focal_length)
-                               * (field_y + field_x)).shape)
-            wavefront.field = (torch.exp(1j * kz * self.focal_length)
-                               * (field_y + field_x)).flatten(0, 1)[..., [0, 1]]
+            wavefront.field = (field_x + field_y).flatten(1, 2)[[0, 1]]
 
 
 class ThinLens(OpticalElement):
@@ -347,19 +369,21 @@ def chirp_z_2d(x, m, f_lims, fs, endpoint=True, power_2=True):
 
 if __name__ == "__main__":
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    track = Track(device=device)
-    track.load_file("./track.npy")
     wavefnt = Wavefront(0, 3.77e6,
-                        np.array([-0.03, 0.03, -0.031, 0.031]),
-                        np.array([10, 10]), 2, device=device)
+                        np.array([-0.0375, 0.0375, -0.0375, 0.0375]),
+                        np.array([7040, 7000]), 2, device=device)
 
-    wavefnt.field[:, 0] = 1
-    aper = CircularAperture(0.03)
+    in_wf = np.load("/Users/rwatt/Documents/Edge-Radiation/SRW/Compressor/SRW_WF0.1.npy")
+    in_wf = torch.tensor(in_wf).permute((2, 1, 0)).flatten(1, 2)
+
+    wavefnt.field = in_wf / 1e17
+    aper = CircularAperture(0.0375)
     aper.propagate(wavefnt)
-    wavefnt.pad_wavefront(20)
-    wavefnt.plot_intensity()
-    
-    prop = DebyeProp(0.1)
-    prop.propagate(wavefnt)
+    wavefnt.plot_intensity(ds_fact=10)
+
+    prop = FraunhoferProp(0.105)
+
+    prop.propagate(wavefnt, new_shape=[1000, 1000], new_bounds=[-0.0018, 0.0018,
+                                                                -0.002, 0.002])
     wavefnt.plot_intensity()
     plt.show()
