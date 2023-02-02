@@ -4,7 +4,8 @@ from Track import Track
 from Wavefront import Wavefront
 import torch
 
-# Todo Change everything so that polarisation axis ios the first
+# Todo Change everything so that polarisation axis is the first.
+#  Also change things so that the field is saved as a 2d array rather than 1
 
 c_light = 0.29979245
 

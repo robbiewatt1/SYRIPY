@@ -1,11 +1,13 @@
 import numpy as np
 import torch
+import torch.linalg
 import matplotlib.pyplot as plt
 
 
 class Track(torch.nn.Module):
     """
-    Class which handles the central electron beam track.
+    Class which handles tracking of an electron through the magnetic setup. This
+    can either be solved using an RK4 method or loaded from an external file.
     """
 
     def __init__(self, device=None):
@@ -15,9 +17,12 @@ class Track(torch.nn.Module):
         super().__init__()
         # Load from track file
         self.device = device
-        self.time = None
-        self.r = None
-        self.beta = None
+        self.time = None  # Proper time along particle path
+        self.r = None     # Particle position
+        self.beta = None  # Velocity along particle path
+
+        self.field_container = None
+        self.field_index = None
 
     def load_file(self, track_file):
         """
@@ -44,18 +49,66 @@ class Track(torch.nn.Module):
                 self.r[:, axes[1]].cpu().detach().numpy())
         return fig, ax
 
-    def init_sim(self, field_container, init_pos, time):
+    def sim_single(self, field_container, time, r_0, beta_0):
         """
-        Passes an array of magnetic fields to the
-        :param field_container: Instance of field container class
-        :param init_pos:
-        :param time:
-        :return:
+        Models the trajectory of a single particle through a field defined
+        by field_container
+        :param field_container: Instance of class FieldContainer.
+        :param time: Array of times
+        :param r_0:
+        :param beta_0:
         """
-        pass
+        # TODO add some checks to make sure setup is ok. e.g. check that
+        #  starting position is inside first field element
 
-    def sim_track(self):
-        pass
+        delta_t_2 = (time[1] - time[0]) / 2.
+        self.time = time
+        self.r = torch.zeros((self.time.shape[0], 3), device=self.device)
+        self.beta = torch.zeros((self.time.shape[0], 3), device=self.device)
+        self.field_index = torch.zeros_like(time, dtype=torch.int,
+                                            device=self.device)
+        self.r[0] = r_0
+        self.beta[0] = beta_0
+        self.field_index[0] = 0
+
+        for i, t in enumerate(time[:-1]):
+            self.field_index[i] = field_container.get_index(self.r[i, 2],
+                                                            self.field_index[i])
+            field = field_container.get_field(self.r[i], self.field_index[i])
+
+            r_k1 = self.beta[i]
+            beta_k1 = self._db_dt(r_k1, field)
+
+            field = field_container.get_field(self.r[i] + r_k1 * delta_t_2,
+                                              self.field_index[i])
+            r_k2 = self.beta[i] + beta_k1 * delta_t_2
+            beta_k2 = self._db_dt(r_k2, field)
+
+            field = field_container.get_field(self.r[i] + r_k2 * delta_t_2,
+                                              self.field_index[i])
+            r_k3 = self.beta[i] + beta_k2 * delta_t_2
+            beta_k3 = self._db_dt(r_k3, field)
+
+            field = field_container.get_field(self.r[i] + r_k3 * delta_t_2,
+                                              self.field_index[i])
+            r_k4 = self.beta[i] + beta_k3 * delta_t_2
+            beta_k4 = self._db_dt(r_k4, field)
+
+            self.r[i+1] = self.r[i] + (delta_t_2 / 3.) * (r_k1 + 2. * r_k2
+                                                          + 2. * r_k3 + r_k4)
+            self.beta[i+1] = self.beta[i] + (delta_t_2 / 3.) \
+                             * (beta_k1 + 2. * beta_k2 + 2. * beta_k3 + beta_k4)
+
+    @staticmethod
+    def _db_dt(beta, field):
+        """
+        Rate of change of beta w.r.t time.
+        :param beta: Particle velocity
+        :param field: Magnetic field
+        :return: beta gradient
+        """
+        return (1. - torch.sum(beta * beta))**1.5 \
+               * torch.cross(beta, field)
 
 
 class FieldBlock:
@@ -76,7 +129,7 @@ class FieldBlock:
         :param field_extent: Extent of field beyond the main part. Given in
             units of edge_length.
         """
-        self.center_pos = center_pos
+        self.center_pos = torch.tensor(center_pos)
         self.length = length
         self.B0 = B0
         self.direction = direction
@@ -109,7 +162,6 @@ class FieldBlock:
         :param z: Distance from end of main field.
         :return: Fringe field vector [bx, by, bz] (bx always 0)
         """
-        print(b / (1 + (z / self.edge_scaled)**2.)**2.)
         return b / (1 + (z / self.edge_scaled)**2.)**2.
 
 
@@ -205,36 +257,49 @@ class FieldContainer:
         for i, field in enumerate(field_array):
             self.bounds.extend(field.bounds)
             self.field_idx.extend([i, -1])
+        self.bounds.append(float("inf"))
 
-    def get_field(self, position):
+        # Check that field bounds are monotonically increasing
+        for i, bound in enumerate(self.bounds[1:], 1):
+            if bound <= self.bounds[i-1]:
+                raise Exception("Error: Field boundaries are overlapping. "
+                                "Try reducing field_extent to prevent this.")
+
+    def get_index(self, z_pos, current_index):
+        """
+        Checks if particle has propagated boundary to next element
+        :param z_pos: Current z position of particle
+        :param current_index: Current index of particle
+        :return: Index of field element we are in
+        """
+        if z_pos > self.bounds[current_index]:
+            return current_index+1
+        else:
+            return current_index
+
+    def get_field(self, position, index):
         """
         Finds which element we are in and returns field
         :param position: Position of particle
+        :param index: Which element field we are in
         :return: Magnetic field vector.
         """
-        # Do a linear search to fine which field we are in. If I ever need to
-        # add lots of elemets then a binary search will give O(log n)
-
-        index = 0
-        if index == -1:
-            return torch.tensor([0, 0, 0])
+        if self.field_idx[index] == -1:
+            return torch.tensor([0., 0., 0.])
         else:
-            return self.field_array[index].get_field(position)
-
-
-
+            return self.field_array[self.field_idx[index]].get_field(position)
 
 
 if __name__ == "__main__":
-    test = Quadrupole(torch.tensor([0,0,0]), 1, 1, None, 0.5, 5)
-    z = torch.linspace(-2, 2, 1000)
-    x = torch.zeros_like(z) + 0.1
-    p = torch.stack([x, x, z]).T
+    q1 = Dipole([0, 0, 0], 1e6, 1., None, 0.05, 5)
+    test = FieldContainer([q1])
 
-    f = torch.zeros(1000)
-    for i in range(1000):
-        f[i] = test.get_field(p[i])[1]
-
-    fig, ax = plt.subplots()
-    ax.plot(z, f)
+    track = Track()
+    beta0 = torch.tensor([0, 0, 0.9])
+    r0 = torch.tensor([0, 0, -1])
+    time = torch.linspace(0, 5, 100)
+    track.sim_single(test, time, r0, beta0)
+    track.plot_track([2, 0])
     plt.show()
+
+
