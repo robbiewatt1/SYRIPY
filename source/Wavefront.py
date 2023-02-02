@@ -69,12 +69,15 @@ class Wavefront(torch.nn.Module):
             = self.field.reshape(self.dims, x_size_old, y_size_old)
         self.field = new_field.flatten(1, 2)
 
-    def update_bounds(self, bounds):
+    def update_bounds(self, bounds, n_samples_xy):
         """
         Updates the bounds of the wavefront and changes the grid coords.
         :param bounds: New bounds of wavefront [xmin, xmax, ymin, ymax]
+        :param n_samples_xy: Samples in wavefront [n_x, n_y]
         """
         self.wf_bounds = bounds
+        self.n_samples_xy = n_samples_xy
+        self.n_samples = n_samples_xy[0] * n_samples_xy[1]
         self.x_axis = torch.linspace(self.wf_bounds[0], self.wf_bounds[1],
                                      self.n_samples_xy[0], device=self.device)
         self.y_axis = torch.linspace(self.wf_bounds[2], self.wf_bounds[3],
@@ -127,7 +130,6 @@ class Wavefront(torch.nn.Module):
                          torch.abs(self.field[1, :])**2.0 +
                          torch.abs(self.field[2, :])**2.0
                          ).cpu().detach().numpy()
-        print(self.field.shape)
         intensity = intensity.reshape(self.n_samples_xy[0],
                                       self.n_samples_xy[1]).T
 
@@ -136,13 +138,13 @@ class Wavefront(torch.nn.Module):
             pcol = ax.pcolormesh(self.x_axis.cpu().detach().numpy()[::ds_fact],
                                  self.y_axis.cpu().detach().numpy()[::ds_fact],
                                  np.log10(intensity[::ds_fact, ::ds_fact]),
-                                 cmap="jet")
+                                 cmap="jet", shading='auto')
             fig.colorbar(pcol)
         else:
             pcol = ax.pcolormesh(self.x_axis.cpu().detach().numpy()[::ds_fact],
                                  self.y_axis.cpu().detach().numpy()[::ds_fact],
                                  intensity[::ds_fact, ::ds_fact],
-                                 cmap="jet")
+                                 cmap="jet", shading='auto')
             fig.colorbar(pcol)
 
         if axes_lim:
