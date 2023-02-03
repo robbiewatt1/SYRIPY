@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from Track import Track
 from Wavefront import Wavefront
 import torch
+import time
 
 # Todo Change everything so that polarisation axis is the first.
 #  Also change things so that the field is saved as a 2d array rather than 1
@@ -27,7 +28,7 @@ class EdgeRadSolver(torch.nn.Module):
         self.track = track
         self.device = device
 
-    def auto_dt(self, sample_x=None, ds_windows=100, ds_min=3):
+    def auto_dt(self, sample_x=None, ds_windows=200, ds_min=4):
         """
         Automatically down-samples the track based on large values of
         objective function obj = |grad(1/grad(g))|. Where g(t) is the phase
@@ -49,10 +50,9 @@ class EdgeRadSolver(torch.nn.Module):
                            self.wavefront.n_samples_xy[0]) / 2)
         end_index = int((self.wavefront.n_samples +
                          self.wavefront.n_samples_xy[0]) / 2)
-        r_obs = self.wavefront.coords[start_index:end_index, :, None] - \
-                self.track.r
-
-        r_norm = torch.linalg.norm(r_obs, dim=1)
+        r_obs = self.wavefront.coords[:, start_index:end_index, None] - \
+                self.track.r[:, None, :]
+        r_norm = torch.linalg.norm(r_obs, dim=0)
         phase_samples = self.track.time[None, :] + r_norm / c_light
         phase_grad = torch.gradient(phase_samples,
                                     spacing=(self.track.time,), dim=1)[0]
@@ -104,37 +104,42 @@ class EdgeRadSolver(torch.nn.Module):
         """
 
         # Check array divides evenly into blocks
-        if self.wavefront.coords.shape[0] % blocks != 0:
+        if self.wavefront.coords.shape[1] % blocks != 0:
             raise Exception("Observation array does not divide evenly into "
-                            f"blocks. {self.wavefront.coords.shape[0]} "
+                            f"blocks. {self.wavefront.coords.shape[1]} "
                             f"observation points and {blocks} blocks.")
 
         # Loop blocks and perform calculation
-        block_size = int(self.wavefront.coords.shape[0] / blocks)
+        block_size = int(self.wavefront.coords.shape[1] / blocks)
         for i in range(blocks):
+
             # start and end index of block
             bi = block_size * i
             bf = block_size * (i + 1)
 
             # Calculate observation points
-            r_obs = self.wavefront.coords[bi:bf, :, None] - self.track.r
-            r_norm = torch.linalg.norm(r_obs, dim=1, keepdim=True)
-            n_dir = r_obs[:, :2, :] / r_norm
+            r_obs = self.wavefront.coords[:, bi:bf, None] \
+                    - self.track.r[:, None, :]
+            r_norm = torch.linalg.norm(r_obs, dim=0, keepdim=True)
+            n_dir = r_obs[:2] / r_norm
+
             # Calculate the phase function and gradient
             phase = self.track.time + r_norm / c_light
-            phase = phase - phase[..., 0, None]
+            phase = phase - phase[:, :, None, 0]
             phase_grad = torch.unsqueeze(
                 torch.gradient(torch.squeeze(phase), spacing=(self.track.time,),
-                               dim=1)[0], dim=1)
+                               dim=1)[0], dim=0)
+
             # Now calculate integrand samples
-            int1 = (self.track.beta[:2, :] - n_dir) / (r_norm * phase_grad)
+            int1 = (self.track.beta[:2, None, :] - n_dir) \
+                   / (r_norm * phase_grad)
             int2 = c_light * n_dir / (self.wavefront.omega * r_norm**2.0
                                       * phase_grad)
             real_part = (self.filon_cos(phase, int1, self.wavefront.omega)
                          + self.filon_sin(phase, int2, self.wavefront.omega))
             imag_part = (self.filon_sin(phase, int1, self.wavefront.omega)
                          - self.filon_cos(phase, int2, self.wavefront.omega))
-            self.wavefront.field[bi:bf] = (real_part + 1j * imag_part)
+            self.wavefront.field[:, bi:bf] = (real_part + 1j * imag_part)
 
     @staticmethod
     def solve_edge(t, t_0, beta_0, r_0, omega):
@@ -320,16 +325,17 @@ if __name__ == "__main__":
     track.load_file("./track.npy")
 
     wavefnt = Wavefront(1.7526625849289021, 3.77e6,
-                        [-0.01, 0.01, -0.01, 0.01],
-                        [200, 200], device=device)
-    print("start")
-
+                        [-0.0075, 0.0075, -0.0075, 0.0075],
+                        [1000, 1000], device=device)
 
     slvr = EdgeRadSolver(wavefnt, track)
-    scripted_module = torch.jit.script(slvr)
 
-    scripted_module.auto_res()
-    slvr.solve(1)
+    slvr.auto_dt()
+
+    t = time.time()
+    slvr.solve(20)
+    elapsed = time.time() - t
+    print(elapsed)
     wavefnt.plot_intensity()
     plt.show()
 
