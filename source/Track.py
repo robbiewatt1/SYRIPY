@@ -60,13 +60,15 @@ class Track(torch.nn.Module):
         """
         # TODO add some checks to make sure setup is ok. e.g. check that
         #  starting position is inside first field element
-
-        delta_t_2 = (time[1] - time[0]) / 2.
+        detla_t = (time[1] - time[0])
+        delta_t_2 = detla_t / 2.
         self.time = time
         self.r = torch.zeros((self.time.shape[0], 3), device=self.device)
         self.beta = torch.zeros((self.time.shape[0], 3), device=self.device)
         self.field_index = torch.zeros_like(time, dtype=torch.int,
                                             device=self.device)
+        r_0.requires_grad = True
+        beta_0.requires_grad = True
         self.r[0] = r_0
         self.beta[0] = beta_0
         self.field_index[0] = 0
@@ -75,7 +77,6 @@ class Track(torch.nn.Module):
             self.field_index[i] = field_container.get_index(self.r[i, 2],
                                                             self.field_index[i])
             field = field_container.get_field(self.r[i], self.field_index[i])
-
             r_k1 = self.beta[i]
             beta_k1 = self._db_dt(r_k1, field)
 
@@ -89,9 +90,9 @@ class Track(torch.nn.Module):
             r_k3 = self.beta[i] + beta_k2 * delta_t_2
             beta_k3 = self._db_dt(r_k3, field)
 
-            field = field_container.get_field(self.r[i] + r_k3 * delta_t_2,
+            field = field_container.get_field(self.r[i] + r_k3 * detla_t,
                                               self.field_index[i])
-            r_k4 = self.beta[i] + beta_k3 * delta_t_2
+            r_k4 = self.beta[i] + beta_k3 * detla_t
             beta_k4 = self._db_dt(r_k4, field)
 
             self.r[i+1] = self.r[i] + (delta_t_2 / 3.) * (r_k1 + 2. * r_k2
@@ -291,15 +292,19 @@ class FieldContainer:
 
 
 if __name__ == "__main__":
-    q1 = Dipole([0, 0, 0], 1e6, 1., None, 0.05, 5)
+    torch.autograd.set_detect_anomaly(True)
+    q1 = Dipole([0, 0, 0], 1e6, 1e-5, None, 0.05, 5)
     test = FieldContainer([q1])
 
     track = Track()
     beta0 = torch.tensor([0, 0, 0.9])
-    r0 = torch.tensor([0, 0, -1])
-    time = torch.linspace(0, 5, 100)
+    r0 = torch.tensor([0., 0., -1.])
+    time = torch.linspace(0, 0.1, 100)
     track.sim_single(test, time, r0, beta0)
     track.plot_track([2, 0])
-    plt.show()
+    track.beta[-1, 0].backward()
+    print(track.beta[-1, 0])
+    print(beta0.grad)
 
+    plt.show()
 
