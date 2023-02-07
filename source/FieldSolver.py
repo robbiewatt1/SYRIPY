@@ -57,30 +57,18 @@ class EdgeRadSolver(torch.nn.Module):
         phase_samples = self.track.time[None, :] + r_norm / c_light
         phase_grad = torch.gradient(phase_samples,
                                     spacing=(self.track.time,), dim=1)[0]
-        n_dir = r_obs[:2] / r_norm
+        grad_inv_grad = torch.gradient(1. / phase_grad,
+                                    spacing=(self.track.time,), dim=1)[0]
+        obj_val, _ = torch.max(torch.abs(grad_inv_grad), dim=0)
 
-        int1 = (self.track.beta[:2, None, :] - n_dir) \
-               / (r_norm * phase_grad)
-        int2 = c_light * n_dir / (self.wavefront.omega * r_norm ** 2.0
-                                  * phase_grad)
-
-        print(int1.shape)
-        int1_grad = torch.gradient(torch.squeeze(int1),
-                                       spacing=(self.track.time,), dim=2)[0]
-        int2_grad = torch.gradient(torch.squeeze(int2),
-                                       spacing=(self.track.time,), dim=2)[0]
-
+        print(obj_val.shape)
         fig, ax = plt.subplots()
-        ax.plot(torch.cumsum(torch.abs(int1[0]), dim=1).cpu().T,
-                    self.track.time.cpu())
-        fig, ax = plt.subplots()
-        ax.plot(torch.cumsum(torch.abs(int2[0]), dim=1).cpu().T,
-                    self.track.time.cpu())
+        ax.plot(torch.cumsum(obj_val, dim=0), np.arange(1000))
         plt.show()
-        print(phase_samples.shape)
         input()
 
-        obj_val, _ = torch.max(torch.abs(grad_inv_grad), dim=0)
+
+
 
         # Calculate mean objective value in windows
         window_shape = (-1, int(obj_val.shape[0] / ds_windows))
@@ -337,10 +325,54 @@ class EdgeRadSolver(torch.nn.Module):
                 * torch.cos(omega * x_low)) / omega**3.0
 
 
+class CubicSpline:
+    """"
+    Cubic spline interpolation implimented with torch
+    """
+
+    def __init__(self, x, y):
+        """
+        :param x: x samples
+        :param y: y samples
+        """
+        self.x = x
+        self.y = y
+        self.device = x.device
+        self.A = torch.tensor([
+            [1, 0, -3, 2],
+            [0, 1, -2, 1],
+            [0, 0, 3, -2],
+            [0, 0, -1, 1]],
+            dtype=x.dtype, device=self.device)
+
+    def h_poly(self, x):
+        """
+        Calculates the Hermite polynomials
+        :param x: Locations to calculate polynomials at
+        :return: Hermite polynomials
+        """
+        xx = x[None, :] ** torch.arange(4, device=self.device)[:, None]
+        return torch.matmul(self.A, xx)
+
+    def interp(self, xs):
+        """
+        Performs interpolation at location xs.
+        :param xs: locations to interpolate
+        :return: Interpolated value
+        """
+        m = (self.y[1:] - self.y[:-1]) / (self.x[1:] - self.x[:-1])
+        m = torch.cat([m[[0]], (m[1:] + m[:-1]) / 2, m[[-1]]])
+        idxs = torch.searchsorted(self.x[1:], xs)
+        dx = (self.x[idxs + 1] - self.x[idxs])
+        hh = self.h_poly((xs - self.x[idxs]) / dx)
+        return hh[0] * self.y[idxs] + hh[1] * m[idxs] * dx \
+               + hh[2] * self.y[idxs+1] + hh[3] * m[idxs + 1] * dx
+
+
 if __name__ == "__main__":
     # Todo Make the calulcation single precision
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    device = "cuda"
+    device = "cpu"
 
     track = Track(device=device)
     track.load_file("./track.npy")
@@ -351,7 +383,7 @@ if __name__ == "__main__":
 
     slvr = EdgeRadSolver(wavefnt, track)
 
-    slvr.auto_dt(5)
+    slvr.auto_dt(50)
 
     t = time.time()
     slvr.solve()
