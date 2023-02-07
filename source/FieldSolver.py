@@ -28,37 +28,57 @@ class EdgeRadSolver(torch.nn.Module):
         self.track = track
         self.device = device
 
-    def auto_dt(self, sample_x=None, ds_windows=200, ds_min=4):
+    def auto_dt(self, n_sample_x=None, ds_windows=200, ds_min=4):
         """
         Automatically down-samples the track based on large values of
         objective function obj = |grad(1/grad(g))|. Where g(t) is the phase
         function. Takes sample along x dimension at y=0.
-        :param sample_x: Number of test sample points in x
+        :param n_sample_x: Approximate number of test sample points in x
         :param ds_windows: Number of windows in which the path is down sampled
         :param ds_min: log10 of minimum down sampling factor
         """
 
         # TODO change from down sampling time step to interpolating over path
 
-        if not sample_x:
-            sample_x = self.wavefront.x_axis.shape[0]
+        if n_sample_x:
+            sample_rate = int(self.wavefront.n_samples_xy[0] / n_sample_x)
+        else:
+            sample_rate = 1
 
         # Store initial samples to print reduction
         init_samples = self.track.time.shape[0]
+
         # Calculate grad(1/ grad(phi)) at sample_x points.
-        start_index = int((self.wavefront.n_samples -
-                           self.wavefront.n_samples_xy[0]) / 2)
-        end_index = int((self.wavefront.n_samples +
-                         self.wavefront.n_samples_xy[0]) / 2)
-        r_obs = self.wavefront.coords[:, start_index:end_index, None] - \
-                self.track.r[:, None, :]
+        start_index = self.wavefront.n_samples_xy[1] // 2
+        r_obs = self.wavefront.coords[
+                :, start_index::self.wavefront.n_samples_xy[1]*sample_rate,
+                None] - self.track.r[:, None, :]
         r_norm = torch.linalg.norm(r_obs, dim=0)
         phase_samples = self.track.time[None, :] + r_norm / c_light
         phase_grad = torch.gradient(phase_samples,
                                     spacing=(self.track.time,), dim=1)[0]
-        inv_phase_grad = 1 / phase_grad
-        grad_inv_grad = torch.gradient(torch.squeeze(inv_phase_grad),
-                                       spacing=(self.track.time,), dim=1)[0]
+        n_dir = r_obs[:2] / r_norm
+
+        int1 = (self.track.beta[:2, None, :] - n_dir) \
+               / (r_norm * phase_grad)
+        int2 = c_light * n_dir / (self.wavefront.omega * r_norm ** 2.0
+                                  * phase_grad)
+
+        print(int1.shape)
+        int1_grad = torch.gradient(torch.squeeze(int1),
+                                       spacing=(self.track.time,), dim=2)[0]
+        int2_grad = torch.gradient(torch.squeeze(int2),
+                                       spacing=(self.track.time,), dim=2)[0]
+
+        fig, ax = plt.subplots()
+        ax.plot(torch.cumsum(torch.abs(int1[0]), dim=1).cpu().T,
+                    self.track.time.cpu())
+        fig, ax = plt.subplots()
+        ax.plot(torch.cumsum(torch.abs(int2[0]), dim=1).cpu().T,
+                    self.track.time.cpu())
+        plt.show()
+        print(phase_samples.shape)
+        input()
 
         obj_val, _ = torch.max(torch.abs(grad_inv_grad), dim=0)
 
@@ -321,19 +341,20 @@ if __name__ == "__main__":
     # Todo Make the calulcation single precision
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     device = "cuda"
+
     track = Track(device=device)
     track.load_file("./track.npy")
 
     wavefnt = Wavefront(1.7526625849289021, 3.77e6,
-                        [-0.0075, 0.0075, -0.0075, 0.0075],
-                        [1000, 1000], device=device)
+                        [-0.01, 0.01, -0.01, 0.01],
+                        [300, 300], device=device)
 
     slvr = EdgeRadSolver(wavefnt, track)
 
-    slvr.auto_dt()
+    slvr.auto_dt(5)
 
     t = time.time()
-    slvr.solve(20)
+    slvr.solve()
     elapsed = time.time() - t
     print(elapsed)
     wavefnt.plot_intensity()
