@@ -279,6 +279,8 @@ if __name__ == "__main__":
     r0 = torch.tensor([-0.09318194668, 0, -1])
     time = torch.linspace(0, 10, 1000)
     track.sim_single(test, time, r0, d0, gamma)
-    track.plot_track([2, 0], True)
+    fig, ax = track.plot_track([2, 0], True)
+    ax.set_xlabel("z (m)")
+    ax.set_ylabel("x (m)")
     plt.show()
 

@@ -116,6 +116,9 @@ class Wavefront(torch.nn.Module):
     def plot_intensity(self, log_plot=False, axes_lim=None, ds_fact=1):
         """
         Plots the intensity of the wavefront.
+        :param log_plot: Make intensity axis logged
+        :param axes_lim: Sets the x/y axes limits [[xmin, xmax], [ymin, ymax]]
+        :param ds_fact=1
         :return: (fig, ax)
         """
         if self.dims == 1:
@@ -151,3 +154,11 @@ class Wavefront(torch.nn.Module):
             ax.set_xlim(axes_lim[0], axes_lim[1])
             ax.set_ylim(axes_lim[2], axes_lim[3])
         return fig, ax
+
+    def plot_phase(self):
+        phase = torch.angle(self.field[0]).reshape(self.n_samples_xy[0],
+                                                self.n_samples_xy[1]).T
+        fig, ax = plt.subplots()
+        ax.pcolormesh(phase.cpu().detach().numpy(),
+                      cmap="jet", shading='auto')
+

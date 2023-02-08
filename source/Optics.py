@@ -368,6 +368,35 @@ def chirp_z_2d(x, m, f_lims, fs, endpoint=True, power_2=True):
 
 
 if __name__ == "__main__":
+
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    track = Track(device=device)
+    track.load_file("./track.npy")
+
+    wavefnt = Wavefront(1.7526625849289021, 3.77e6,
+                        [-0.01, 0.01, -0.01, 0.01],
+                        [4000, 4000], device=device)
+
+    slvr = EdgeRadSolver(wavefnt, track, device=device)
+
+    slvr.set_dt(1000, flat_power=0.5)
+    slvr.solve(400)
+
+
+    aper = CircularAperture(0.01)
+    aper.propagate(wavefnt)
+    wavefnt.plot_intensity(ds_fact=4)
+
+    prop = FraunhoferProp(0.105)
+
+    prop.propagate(wavefnt, new_shape=[1000, 1000], new_bounds=[-0.0018, 0.0018,
+                                                                -0.002, 0.002])
+
+    wavefnt.plot_intensity(log_plot=True)
+    plt.show()
+
+    """
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     wavefnt = Wavefront(0, 3.77e6,
                         np.array([-0.0375, 0.0375, -0.0375, 0.0375]),
@@ -387,3 +416,4 @@ if __name__ == "__main__":
                                                                 -0.002, 0.002])
     wavefnt.plot_intensity()
     plt.show()
+    """

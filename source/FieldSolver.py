@@ -3,8 +3,7 @@ import matplotlib.pyplot as plt
 from Track import Track
 from Wavefront import Wavefront
 import torch
-import time
-from scipy.interpolate import CubicSpline as interp1d
+
 
 # Todo Change everything so that polarisation axis is the first.
 #  Also change things so that the field is saved as a 2d array rather than 1
@@ -61,8 +60,6 @@ class EdgeRadSolver(torch.nn.Module):
                                     spacing=(self.track.time,), dim=1)[0]
         grad_inv_grad = torch.gradient(1. / phase_grad,
                                     spacing=(self.track.time,), dim=1)[0]
-        fig, ax = plt.subplots()
-        ax.plot(self.track.time, 1/phase_grad.T, color="blue")
 
         # New samples are then evenly spaced over the cumulative distribution
         objective, _ = torch.max(torch.abs(grad_inv_grad), dim=0)
@@ -70,32 +67,13 @@ class EdgeRadSolver(torch.nn.Module):
         cumulative_obj = cumulative_obj / cumulative_obj[-1]
 
         # Now update all the samples
-
-        track_samples = torch.linspace(0, 1, new_samples)
-        self.track.time = torch.tensor(interp1d(cumulative_obj, self.track.time,
-                                                )(track_samples))
-        r1 = torch.tensor(interp1d(cumulative_obj, self.track.r[0],
-                                                )(track_samples))
-        r2 = torch.tensor(interp1d(cumulative_obj, self.track.r[1],
-                                                )(track_samples))
-        r3 = torch.tensor(interp1d(cumulative_obj, self.track.r[2],
-                                                )(track_samples))
-        self.track.r = torch.stack((r1, r2, r3))
-        beta1 = torch.tensor(interp1d(cumulative_obj, self.track.beta[0],
-                                                )(track_samples))
-        beta2 = torch.tensor(interp1d(cumulative_obj, self.track.beta[1],
-                                                )(track_samples))
-        beta3 = torch.tensor(interp1d(cumulative_obj, self.track.beta[2],
-                                                )(track_samples))
-        self.track.beta = torch.stack((beta1, beta2, beta3))
-
-        #track_samples = torch.linspace(0, 1, new_samples)
-        #self.track.time = CubicInterp(cumulative_obj,
-        #                              self.track.time)(track_samples)
-        #self.track.r = CubicInterp(cumulative_obj.repeat(3, 1),
-        #                           self.track.r)(track_samples.repeat(3, 1))
-        #self.track.beta = CubicInterp(cumulative_obj.repeat(3, 1),
-        #                            self.track.beta)(track_samples.repeat(3, 1))
+        track_samples = torch.linspace(0, 1, new_samples, device=self.device)
+        self.track.time = CubicInterp(cumulative_obj,
+                                      self.track.time)(track_samples)
+        self.track.r = CubicInterp(cumulative_obj.repeat(3, 1),
+                                   self.track.r)(track_samples.repeat(3, 1))
+        self.track.beta = CubicInterp(cumulative_obj.repeat(3, 1),
+                                    self.track.beta)(track_samples.repeat(3, 1))
 
         start_index = self.wavefront.n_samples_xy[1] // 2
         r_obs = self.wavefront.coords[
@@ -107,9 +85,6 @@ class EdgeRadSolver(torch.nn.Module):
                                     spacing=(self.track.time,), dim=1)[0]
         grad_inv_grad = torch.gradient(1. / phase_grad,
                                     spacing=(self.track.time,), dim=1)[0]
-
-        ax.plot(self.track.time, 1/phase_grad.T, color="red")
-        plt.show()
 
     def solve(self, blocks=1):
         """
@@ -151,18 +126,6 @@ class EdgeRadSolver(torch.nn.Module):
                    / (r_norm * phase_grad)
             int2 = c_light * n_dir / (self.wavefront.omega * r_norm**2.0
                                       * phase_grad)
-
-
-            """"
-            print(int1.shape, int2.shape)
-            fig, ax = plt.subplots()
-            ax.plot(self.track.time, int1[0].T)
-            plt.show()
-            input()
-            """
-
-
-
 
             real_part = (self.filon_cos(phase, int1, self.wavefront.omega)
                          + self.filon_sin(phase, int2, self.wavefront.omega))
@@ -400,23 +363,23 @@ class CubicInterp:
 if __name__ == "__main__":
     # Todo Make the calulcation single precision
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    device = "cpu"
 
     track = Track(device=device)
-    track.load_file("./../EdgeRadSolver1/track_test.npy")
+    track.load_file("./track.npy")
     print(track.r.shape)
 
     wavefnt = Wavefront(1.7526625849289021, 3.77e6,
-                        [-0.01, 0.01, -0.01, 0.01],
+                        [-0.03, 0.03, -0.02, 0.02],
                         [1000, 1000], device=device)
 
-    slvr = EdgeRadSolver(wavefnt, track)
+    slvr = EdgeRadSolver(wavefnt, track, device=device)
 
 
-    slvr.set_dt(50, flat_power=0.5)
-    slvr.solve()
-    wavefnt.plot_intensity()
-
+    slvr.set_dt(400, flat_power=0.5)
+    slvr.solve(200)
+    fig, ax = wavefnt.plot_intensity()
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
     plt.show()
 
 
