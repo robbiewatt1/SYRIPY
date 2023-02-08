@@ -4,6 +4,7 @@ from Track import Track
 from Wavefront import Wavefront
 import torch
 import time
+from scipy.interpolate import CubicSpline as interp1d
 
 # Todo Change everything so that polarisation axis is the first.
 #  Also change things so that the field is saved as a 2d array rather than 1
@@ -28,14 +29,15 @@ class EdgeRadSolver(torch.nn.Module):
         self.track = track
         self.device = device
 
-    def auto_dt(self, n_sample_x=None, ds_windows=200, ds_min=4):
+    def set_dt(self, new_samples, n_sample_x=None, flat_power=0.5):
         """
-        Automatically down-samples the track based on large values of
-        objective function obj = |grad(1/grad(g))|. Where g(t) is the phase
-        function. Takes sample along x dimension at y=0.
+        Sets the track samples based on large values of objective function
+        obj = |grad(1/grad(g))|. Where g(t) is the phase function. Takes sample
+        along x dimension at y=0.
+        :param new_samples: Number of new samples along trajectory
         :param n_sample_x: Approximate number of test sample points in x
-        :param ds_windows: Number of windows in which the path is down sampled
-        :param ds_min: log10 of minimum down sampling factor
+        :flat_power power to which the objective function is raised. This
+        increases the number of samples in the noisy bit.
         """
 
         # TODO change from down sampling time step to interpolating over path
@@ -59,49 +61,55 @@ class EdgeRadSolver(torch.nn.Module):
                                     spacing=(self.track.time,), dim=1)[0]
         grad_inv_grad = torch.gradient(1. / phase_grad,
                                     spacing=(self.track.time,), dim=1)[0]
-        obj_val, _ = torch.max(torch.abs(grad_inv_grad), dim=0)
-
-        print(obj_val.shape)
         fig, ax = plt.subplots()
-        ax.plot(torch.cumsum(obj_val, dim=0), np.arange(1000))
+        ax.plot(self.track.time, 1/phase_grad.T, color="blue")
+
+        # New samples are then evenly spaced over the cumulative distribution
+        objective, _ = torch.max(torch.abs(grad_inv_grad), dim=0)
+        cumulative_obj = torch.cumsum(objective**flat_power, dim=0)
+        cumulative_obj = cumulative_obj / cumulative_obj[-1]
+
+        # Now update all the samples
+
+        track_samples = torch.linspace(0, 1, new_samples)
+        self.track.time = torch.tensor(interp1d(cumulative_obj, self.track.time,
+                                                )(track_samples))
+        r1 = torch.tensor(interp1d(cumulative_obj, self.track.r[0],
+                                                )(track_samples))
+        r2 = torch.tensor(interp1d(cumulative_obj, self.track.r[1],
+                                                )(track_samples))
+        r3 = torch.tensor(interp1d(cumulative_obj, self.track.r[2],
+                                                )(track_samples))
+        self.track.r = torch.stack((r1, r2, r3))
+        beta1 = torch.tensor(interp1d(cumulative_obj, self.track.beta[0],
+                                                )(track_samples))
+        beta2 = torch.tensor(interp1d(cumulative_obj, self.track.beta[1],
+                                                )(track_samples))
+        beta3 = torch.tensor(interp1d(cumulative_obj, self.track.beta[2],
+                                                )(track_samples))
+        self.track.beta = torch.stack((beta1, beta2, beta3))
+
+        #track_samples = torch.linspace(0, 1, new_samples)
+        #self.track.time = CubicInterp(cumulative_obj,
+        #                              self.track.time)(track_samples)
+        #self.track.r = CubicInterp(cumulative_obj.repeat(3, 1),
+        #                           self.track.r)(track_samples.repeat(3, 1))
+        #self.track.beta = CubicInterp(cumulative_obj.repeat(3, 1),
+        #                            self.track.beta)(track_samples.repeat(3, 1))
+
+        start_index = self.wavefront.n_samples_xy[1] // 2
+        r_obs = self.wavefront.coords[
+                :, start_index::self.wavefront.n_samples_xy[1]*sample_rate,
+                None] - self.track.r[:, None, :]
+        r_norm = torch.linalg.norm(r_obs, dim=0)
+        phase_samples = self.track.time[None, :] + r_norm / c_light
+        phase_grad = torch.gradient(phase_samples,
+                                    spacing=(self.track.time,), dim=1)[0]
+        grad_inv_grad = torch.gradient(1. / phase_grad,
+                                    spacing=(self.track.time,), dim=1)[0]
+
+        ax.plot(self.track.time, 1/phase_grad.T, color="red")
         plt.show()
-        input()
-
-
-
-
-        # Calculate mean objective value in windows
-        window_shape = (-1, int(obj_val.shape[0] / ds_windows))
-        obj_val_windows, _ = torch.max(obj_val.reshape(window_shape), dim=1)
-
-        # Calculate the down-sampling factor for each window
-        window_ds_fact = -torch.log10(obj_val_windows
-                                      / torch.max(obj_val_windows))
-        # Clip down sampling at min value
-        window_ds_fact = torch.clip(window_ds_fact, min=0, max=ds_min)
-
-        # Apply down-sampling to track values
-        # time
-        time_list = list(self.track.time.reshape(window_shape))
-        time_list = [t[::int(10**window_ds_fact[i])]
-                     for i, t in enumerate(time_list)]
-        self.track.time = torch.cat(time_list)
-
-        # Beta
-        b_list = list(self.track.beta.reshape((3, *window_shape))
-                      .permute(1, 2, 0))
-        beta_list = [b[::int(10**window_ds_fact[i])]
-                     for i, b in enumerate(b_list)]
-        self.track.beta = torch.cat(beta_list).T
-
-        # Position
-        r_list = list(self.track.r.reshape((3, *window_shape))
-                      .permute(1, 2, 0))
-        r_list = [r[::int(10**window_ds_fact[i])]
-                  for i, r in enumerate(r_list)]
-        self.track.r = torch.cat(r_list).T
-        print("auto_res reduction factor: ", init_samples /
-              self.track.time.shape[0])
 
     def solve(self, blocks=1):
         """
@@ -143,6 +151,19 @@ class EdgeRadSolver(torch.nn.Module):
                    / (r_norm * phase_grad)
             int2 = c_light * n_dir / (self.wavefront.omega * r_norm**2.0
                                       * phase_grad)
+
+
+            """"
+            print(int1.shape, int2.shape)
+            fig, ax = plt.subplots()
+            ax.plot(self.track.time, int1[0].T)
+            plt.show()
+            input()
+            """
+
+
+
+
             real_part = (self.filon_cos(phase, int1, self.wavefront.omega)
                          + self.filon_sin(phase, int2, self.wavefront.omega))
             imag_part = (self.filon_sin(phase, int1, self.wavefront.omega)
@@ -325,9 +346,10 @@ class EdgeRadSolver(torch.nn.Module):
                 * torch.cos(omega * x_low)) / omega**3.0
 
 
-class CubicSpline:
-    """"
-    Cubic spline interpolation implimented with torch
+class CubicInterp:
+    """
+    Cubic spline interpolator class using pytorch. Can perform multiple
+    interpolations along batch dimension.
     """
 
     def __init__(self, x, y):
@@ -351,22 +373,28 @@ class CubicSpline:
         :param x: Locations to calculate polynomials at
         :return: Hermite polynomials
         """
-        xx = x[None, :] ** torch.arange(4, device=self.device)[:, None]
+        xx = x[..., None, :] ** torch.arange(
+            4, device=self.device)[..., :, None]
         return torch.matmul(self.A, xx)
 
-    def interp(self, xs):
+    def __call__(self, xs):
         """
         Performs interpolation at location xs.
         :param xs: locations to interpolate
         :return: Interpolated value
         """
-        m = (self.y[1:] - self.y[:-1]) / (self.x[1:] - self.x[:-1])
-        m = torch.cat([m[[0]], (m[1:] + m[:-1]) / 2, m[[-1]]])
-        idxs = torch.searchsorted(self.x[1:], xs)
-        dx = (self.x[idxs + 1] - self.x[idxs])
-        hh = self.h_poly((xs - self.x[idxs]) / dx)
-        return hh[0] * self.y[idxs] + hh[1] * m[idxs] * dx \
-               + hh[2] * self.y[idxs+1] + hh[3] * m[idxs + 1] * dx
+        m = ((self.y[..., 1:] - self.y[..., :-1]) /
+             (self.x[..., 1:] - self.x[..., :-1]))
+        m = torch.cat([m[..., [0]], (m[..., 1:] + m[..., :-1]) / 2,
+                       m[..., [-1]]], dim=-1)
+        idx = torch.searchsorted(self.x[..., 1:].contiguous(), xs)
+        dx = (torch.gather(self.x, dim=-1, index=idx+1)
+              - torch.gather(self.x, dim=-1, index=idx))
+        hh = self.h_poly((xs - torch.gather(self.x, dim=-1, index=idx)) / dx)
+        return (hh[..., 0, :] * torch.gather(self.y, dim=-1, index=idx)
+                + hh[..., 1, :] * torch.gather(m, dim=-1, index=idx)
+                * dx + hh[..., 2, :] * torch.gather(self.y, dim=-1, index=idx+1)
+                + hh[..., 3, :] * torch.gather(m, dim=-1, index=idx+1) * dx)
 
 
 if __name__ == "__main__":
@@ -375,21 +403,20 @@ if __name__ == "__main__":
     device = "cpu"
 
     track = Track(device=device)
-    track.load_file("./track.npy")
+    track.load_file("./../EdgeRadSolver1/track_test.npy")
+    print(track.r.shape)
 
     wavefnt = Wavefront(1.7526625849289021, 3.77e6,
                         [-0.01, 0.01, -0.01, 0.01],
-                        [300, 300], device=device)
+                        [1000, 1000], device=device)
 
     slvr = EdgeRadSolver(wavefnt, track)
 
-    slvr.auto_dt(50)
 
-    t = time.time()
+    slvr.set_dt(50, flat_power=0.5)
     slvr.solve()
-    elapsed = time.time() - t
-    print(elapsed)
     wavefnt.plot_intensity()
+
     plt.show()
 
 
