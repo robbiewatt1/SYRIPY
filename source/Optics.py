@@ -6,7 +6,7 @@ from Wavefront import Wavefront
 
 # Remove these after checks
 from FieldSolver import EdgeRadSolver
-from Track import Track
+from Track import Track, Dipole, FieldContainer
 import matplotlib.pyplot as plt
 import matplotlib
 
@@ -368,52 +368,38 @@ def chirp_z_2d(x, m, f_lims, fs, endpoint=True, power_2=True):
 
 
 if __name__ == "__main__":
-
+    torch.set_default_tensor_type(torch.DoubleTensor)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    track = Track(device=device)
-    track.load_file("./track.npy")
+    gamma = 339.3 / 0.51099890221
 
-    wavefnt = Wavefront(1.7526625849289021, 3.77e6,
-                        [-0.01, 0.01, -0.01, 0.01],
-                        [4000, 4000], device=device)
+    q1 = Dipole([0, 0, 0], 0.203274830142196, -0.49051235, None, 0.01)
+    q2 = Dipole([0, 0, 1.0334], 0.203274830142196, -0.49051235, None,
+                0.01)
+    test = FieldContainer([q1, q2])
+    track = Track(device=device)
+    d0 = torch.tensor([0.09313368161783511, 0, 1])
+    r0 = torch.tensor([-0.09311173301, 0, -1])
+    time = torch.linspace(0, 10, 10000)
+    track.sim_single(test, time, r0, d0, gamma)
+
+    wavefnt = Wavefront(1.7526625849289021, 3.77e5,
+                        [-0.03, 0.03, -0.03, 0.03],
+                        [1000, 1000], device=device)
 
     slvr = EdgeRadSolver(wavefnt, track, device=device)
 
-    slvr.set_dt(1000, flat_power=0.5)
-    slvr.solve(400)
+    slvr.set_dt(200, flat_power=0.5)
+    slvr.solve(100)
 
-
-    aper = CircularAperture(0.01)
+    aper = CircularAperture(0.03)
     aper.propagate(wavefnt)
-    wavefnt.plot_intensity(ds_fact=4)
+    wavefnt.plot_intensity()
 
-    prop = FraunhoferProp(0.105)
+    prop = FraunhoferProp(3)
 
-    prop.propagate(wavefnt, new_shape=[1000, 1000], new_bounds=[-0.0018, 0.0018,
-                                                                -0.002, 0.002])
+    prop.propagate(wavefnt, new_shape=[2000, 2000],
+                  new_bounds=[-0.05, 0.05, -0.05, 0.05])
 
-    wavefnt.plot_intensity(log_plot=True)
-    plt.show()
-
-    """
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    wavefnt = Wavefront(0, 3.77e6,
-                        np.array([-0.0375, 0.0375, -0.0375, 0.0375]),
-                        np.array([7040, 7000]), 2, device=device)
-
-    in_wf = np.load("/Users/rwatt/Documents/Edge-Radiation/SRW/Compressor/SRW_WF0.1.npy")
-    in_wf = torch.tensor(in_wf).permute((2, 1, 0)).flatten(1, 2)
-
-    wavefnt.field = in_wf / 1e17
-    aper = CircularAperture(0.0375)
-    aper.propagate(wavefnt)
-    wavefnt.plot_intensity(ds_fact=10)
-
-    prop = FraunhoferProp(0.105)
-
-    prop.propagate(wavefnt, new_shape=[1000, 1000], new_bounds=[-0.0018, 0.0018,
-                                                                -0.002, 0.002])
     wavefnt.plot_intensity()
     plt.show()
-    """

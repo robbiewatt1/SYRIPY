@@ -162,3 +162,21 @@ class Wavefront(torch.nn.Module):
         ax.pcolormesh(phase.cpu().detach().numpy(),
                       cmap="jet", shading='auto')
 
+    def plot_line(self):
+        if self.dims == 1:
+            intensity = (torch.abs(self.field[0, :]) ** 2.0
+                         ).cpu().detach().numpy()
+        elif self.dims == 2:
+            intensity = (torch.abs(self.field[0, :])**2.0 +
+                         torch.abs(self.field[1, :])**2.0
+                         ).cpu().detach().numpy()
+        else:
+            intensity = (torch.abs(self.field[0, :])**2.0 +
+                         torch.abs(self.field[1, :])**2.0 +
+                         torch.abs(self.field[2, :])**2.0
+                         ).cpu().detach().numpy()
+        intensity = intensity.reshape(self.n_samples_xy[0],
+                                      self.n_samples_xy[1]).T
+
+        fig, ax = plt.subplots()
+        ax.plot(intensity[1, :])

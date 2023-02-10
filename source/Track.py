@@ -273,13 +273,14 @@ if __name__ == "__main__":
     q2 = Dipole([0, 0, 1.0334], 0.203274830142196, -0.49051235, None,
                 0.01)
     test = FieldContainer([q1, q2])
-
     track = Track()
-    d0 = torch.tensor([0.09320325784982, 0, 1])
-    r0 = torch.tensor([-0.09318194668, 0, -1])
-    time = torch.linspace(0, 10, 1000)
+    d0 = torch.tensor([0.09313368161783511, 0, 1])
+    r0 = torch.tensor([-0.09311173301, 0, -1])
+    time = torch.linspace(0, 10, 10000)
     track.sim_single(test, time, r0, d0, gamma)
     fig, ax = track.plot_track([2, 0], True)
+    #ax.set_xlim([0.2, 0.8])
+    #ax.set_ylim([1e-4, 3e-4])
     ax.set_xlabel("z (m)")
     ax.set_ylabel("x (m)")
     plt.show()
