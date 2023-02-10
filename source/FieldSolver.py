@@ -4,6 +4,9 @@ from Track import Track
 from Wavefront import Wavefront
 import torch
 
+# Remove these after checks
+from Track import Track, Dipole, FieldContainer
+
 
 # Todo Change everything so that polarisation axis is the first.
 #  Also change things so that the field is saved as a 2d array rather than 1
@@ -114,9 +117,12 @@ class EdgeRadSolver(torch.nn.Module):
             r_norm = torch.linalg.norm(r_obs, dim=0, keepdim=True)
             n_dir = r_obs[:2] / r_norm
 
+            #TODO add constant phase term to final result
+
             # Calculate the phase function and gradient
             phase = self.track.time + r_norm / c_light
-            phase = phase - phase[:, :, None, 0]
+            phase0 = phase[:, :, 0]
+            phase = phase - phase0[..., None]
             phase_grad = torch.unsqueeze(
                 torch.gradient(torch.squeeze(phase), spacing=(self.track.time,),
                                dim=1)[0], dim=0)
@@ -126,12 +132,20 @@ class EdgeRadSolver(torch.nn.Module):
                    / (r_norm * phase_grad)
             int2 = c_light * n_dir / (self.wavefront.omega * r_norm**2.0
                                       * phase_grad)
+            #print(phase.shape)
+            #fig, ax = plt.subplots()
+            #ax.plot(self.track.r[2].cpu(), int1[0, 7:9].cpu().T)
+            #fig, ax = plt.subplots()
+            #ax.plot(self.track.r[2].cpu(), int2[0, 7:9].cpu().T)
+            #plt.show()
 
             real_part = (self.filon_cos(phase, int1, self.wavefront.omega)
                          + self.filon_sin(phase, int2, self.wavefront.omega))
             imag_part = (self.filon_sin(phase, int1, self.wavefront.omega)
                          - self.filon_cos(phase, int2, self.wavefront.omega))
-            self.wavefront.field[:, bi:bf] = (real_part + 1j * imag_part)
+            self.wavefront.field[:, bi:bf] = (real_part + 1j * imag_part) \
+                                * torch.exp(1j * self.wavefront.omega *
+                                            phase0)
 
     @staticmethod
     def solve_edge(t, t_0, beta_0, r_0, omega):
@@ -361,25 +375,31 @@ class CubicInterp:
 
 
 if __name__ == "__main__":
-    # Todo Make the calulcation single precision
+
+    torch.set_default_tensor_type(torch.DoubleTensor)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    track = Track(device=device)
-    track.load_file("./track.npy")
-    print(track.r.shape)
+    gamma = 339.3 / 0.51099890221
 
-    wavefnt = Wavefront(1.7526625849289021, 3.77e6,
-                        [-0.03, 0.03, -0.02, 0.02],
-                        [1000, 1000], device=device)
+    q1 = Dipole([0, 0, 0], 0.203274830142196, -0.49051235, None, 0.01)
+    q2 = Dipole([0, 0, 1.0334], 0.203274830142196, -0.49051235, None,
+                0.01)
+    test = FieldContainer([q1, q2])
+    track = Track(device=device)
+    d0 = torch.tensor([0.09313368161783511, 0, 1])
+    r0 = torch.tensor([-0.09311173301, 0, -1])
+    time = torch.linspace(0, 50, 10000)
+    track.sim_single(test, time, r0, d0, gamma)
+    fig, ax = track.plot_track([2, 0], True)
+
+    wavefnt = Wavefront(1.0526625849289021, 3.77e6,
+                        [-0.1, 0.1, -0.1, 0.1],
+                        [5, 3], device=device)
 
     slvr = EdgeRadSolver(wavefnt, track, device=device)
 
+    #slvr.set_dt(200, flat_power=0.5)
+    slvr.solve(1)
 
-    slvr.set_dt(400, flat_power=0.5)
-    slvr.solve(200)
-    fig, ax = wavefnt.plot_intensity()
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
+    wavefnt.plot_line()
     plt.show()
-
-
