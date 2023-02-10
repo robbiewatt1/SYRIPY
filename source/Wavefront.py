@@ -113,12 +113,15 @@ class Wavefront(torch.nn.Module):
         self.field = new_field
         self.dims = new_dims
 
-    def plot_intensity(self, log_plot=False, axes_lim=None, ds_fact=1):
+    def plot_intensity(self, log_plot=False, axes_lim=None, ds_fact=1,
+                       lineout=None):
         """
         Plots the intensity of the wavefront.
         :param log_plot: Make intensity axis logged
         :param axes_lim: Sets the x/y axes limits [[xmin, xmax], [ymin, ymax]]
-        :param ds_fact=1
+        :param ds_fact: Down sample image to make plotting easier
+        :param lineout: Axis and index of lineout e.g [0, 50] will plot a
+         lineout along y at x_i = 50. Defult is None which plots 2d image
         :return: (fig, ax)
         """
         if self.dims == 1:
@@ -135,30 +138,61 @@ class Wavefront(torch.nn.Module):
                          ).cpu().detach().numpy()
         intensity = intensity.reshape(self.n_samples_xy[0],
                                       self.n_samples_xy[1]).T
-
         fig, ax = plt.subplots()
-        if log_plot:
-            pcol = ax.pcolormesh(self.x_axis.cpu().detach().numpy()[::ds_fact],
-                                 self.y_axis.cpu().detach().numpy()[::ds_fact],
-                                 np.log10(intensity[::ds_fact, ::ds_fact]),
-                                 cmap="jet", shading='auto')
-            fig.colorbar(pcol)
-        else:
-            pcol = ax.pcolormesh(self.x_axis.cpu().detach().numpy()[::ds_fact],
-                                 self.y_axis.cpu().detach().numpy()[::ds_fact],
-                                 intensity[::ds_fact, ::ds_fact],
-                                 cmap="jet", shading='auto')
-            fig.colorbar(pcol)
+        if lineout:  # 1D plot
+            if lineout[0] == 0:
+                ax.plot(intensity[lineout[1], :])
+            else:
+                ax.plot(intensity[:, lineout[1]])
+        else:  # 2D plot
+            if log_plot:
+                pcol = ax.pcolormesh(self.x_axis.cpu().detach().numpy()[::ds_fact],
+                                     self.y_axis.cpu().detach().numpy()[::ds_fact],
+                                     np.log10(intensity[::ds_fact, ::ds_fact]),
+                                     cmap="jet", shading='auto')
+                fig.colorbar(pcol)
+            else:
+                pcol = ax.pcolormesh(self.x_axis.cpu().detach().numpy()[::ds_fact],
+                                     self.y_axis.cpu().detach().numpy()[::ds_fact],
+                                     intensity[::ds_fact, ::ds_fact],
+                                     cmap="jet", shading='auto')
+                fig.colorbar(pcol)
 
         if axes_lim:
             ax.set_xlim(axes_lim[0], axes_lim[1])
             ax.set_ylim(axes_lim[2], axes_lim[3])
         return fig, ax
 
-    def plot_phase(self):
-        phase = torch.angle(self.field[0]).reshape(self.n_samples_xy[0],
-                                                self.n_samples_xy[1]).T
+    def plot_phase(self, dim=0, axes_lim=None, ds_fact=1, lineout=None):
+        """
+        Plots the intensity of the wavefront.
+        :param axes_lim: Sets the x/y axes limits [[xmin, xmax], [ymin, ymax]]
+        :param ds_fact: Down sample image to make plotting easier
+        :param lineout: Axis and index of lineout e.g [0, 50] will plot a
+         lineout along y at x_i = 50. Defult is None which plots 2d image
+        :return: (fig, ax)
+        """
+        phase = torch.angle(self.field[dim]).reshape(self.n_samples_xy[0],
+                                                     self.n_samples_xy[1]).T
         fig, ax = plt.subplots()
         ax.pcolormesh(phase.cpu().detach().numpy(),
                       cmap="jet", shading='auto')
 
+        fig, ax = plt.subplots()
+        if lineout:  # 1D plot
+            if lineout[0] == 0:
+                ax.plot(phase[lineout[1], :])
+            else:
+                ax.plot(phase[:, lineout[1]])
+        else:  # 2D plot
+            pcol = ax.pcolormesh(
+                self.x_axis.cpu().detach().numpy()[::ds_fact],
+                self.y_axis.cpu().detach().numpy()[::ds_fact],
+                phase[::ds_fact, ::ds_fact],
+                cmap="jet", shading='auto')
+            fig.colorbar(pcol)
+
+        if axes_lim:
+            ax.set_xlim(axes_lim[0], axes_lim[1])
+            ax.set_ylim(axes_lim[2], axes_lim[3])
+        return fig, ax
