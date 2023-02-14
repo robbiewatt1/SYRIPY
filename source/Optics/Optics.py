@@ -1,15 +1,7 @@
 import torch
 import torch.fft as fft
 import numpy as np
-import cmath
-from Wavefront import Wavefront
-
-# Remove these after checks
-from FieldSolver import EdgeRadSolver
-from Track import Track, Dipole, FieldContainer
-import matplotlib.pyplot as plt
-import matplotlib
-
+from ..Wavefront import Wavefront
 
 c_light = 0.29979245
 
@@ -253,16 +245,6 @@ class DebyeProp(OpticalElement):
         field = wavefront.field.reshape(2, wavefront.n_samples_xy[0],
                                         wavefront.n_samples_xy[1])
         # TODO Might need to do some rotations for y
-        fig, ax = plt.subplots()
-        pcol = ax.pcolormesh(torch.angle(g_tx[0]))
-        fig.colorbar(pcol)
-        fig, ax = plt.subplots()
-        pcol = ax.pcolormesh(torch.angle(g_tx[1]))
-        fig.colorbar(pcol)
-        fig, ax = plt.subplots()
-        pcol = ax.pcolormesh(torch.angle(g_tx[2]))
-        fig.colorbar(pcol)
-        plt.show()
 
         if use_czt:
             field_x = chirp_z_2d(g_tx * field[0, :, :], new_shape,
@@ -365,41 +347,3 @@ def chirp_z_2d(x, m, f_lims, fs, endpoint=True, power_2=True):
     y = chirp_z_1d(torch.swapaxes(y, -1, -2), m[0], [f_lims[0], f_lims[1]],
                    fs[0], endpoint, power_2)
     return torch.swapaxes(y, -1, -2)
-
-
-if __name__ == "__main__":
-    torch.set_default_tensor_type(torch.DoubleTensor)
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-    gamma = 339.3 / 0.51099890221
-
-    q1 = Dipole([0, 0, 0], 0.203274830142196, -0.49051235, None, 0.01)
-    q2 = Dipole([0, 0, 1.0334], 0.203274830142196, -0.49051235, None,
-                0.01)
-    test = FieldContainer([q1, q2])
-    track = Track(device=device)
-    d0 = torch.tensor([0.09313368161783511, 0, 1])
-    r0 = torch.tensor([-0.09311173301, 0, -1])
-    time = torch.linspace(0, 10, 10000)
-    track.sim_single(test, time, r0, d0, gamma)
-
-    wavefnt = Wavefront(1.7526625849289021, 3.77e5,
-                        [-0.03, 0.03, -0.03, 0.03],
-                        [1000, 1000], device=device)
-
-    slvr = EdgeRadSolver(wavefnt, track, device=device)
-
-    slvr.set_dt(200, flat_power=0.5)
-    slvr.solve(100)
-
-    aper = CircularAperture(0.03)
-    aper.propagate(wavefnt)
-    wavefnt.plot_intensity()
-
-    prop = FraunhoferProp(3)
-
-    prop.propagate(wavefnt, new_shape=[2000, 2000],
-                  new_bounds=[-0.05, 0.05, -0.05, 0.05])
-
-    wavefnt.plot_intensity()
-    plt.show()

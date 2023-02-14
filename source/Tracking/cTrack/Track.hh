@@ -44,7 +44,13 @@ public:
     void setInit(const ThreeVector &position_0, const ThreeVector &direction_0,
         double gamma);
 
-    // void save(std::string name);
+    /**
+     * Sets the field container for the solver.
+     * @param fieldCont: Instance of field container class
+     */    
+    void setField(const FieldContainer& fieldCont){m_fieldCont = fieldCont;}
+
+    //void save(std::string name);
 
 private:
 
@@ -89,7 +95,7 @@ private:
     std::vector<ThreeVector> m_beta;
 
     // Container class of magnetic field
-    FieldContainer* m_fieldCon;
+    FieldContainer m_fieldCont;
 
     // Bools to test if setup is run
     bool m_timeSet, m_initSet;

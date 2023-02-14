@@ -9,7 +9,7 @@ class FieldBlock
 {
 public:
 
-    FieldBlock();
+    FieldBlock(){};
     
     /**
      * Constructor used to define field element.
@@ -24,7 +24,7 @@ public:
     FieldBlock(const ThreeVector& location, const ThreeVector& fieldStrength,
         double length, double edgeLength);
 
-    ~FieldBlock(){};
+    virtual ~FieldBlock(){};
 
     /**
      * Gets the magnetic field at a given position
@@ -32,7 +32,7 @@ public:
      * @param position: Position to caclulate the field at.
      * @return Magnetic field three vector.
      */
-    virtual ThreeVector getField(const ThreeVector& position) const;
+    virtual ThreeVector getField(const ThreeVector& position) const = 0;
 
 
 protected:
@@ -65,7 +65,7 @@ public:
      * 
      * @param fieldContainer: Vector of field elements
      */
-    FieldContainer(const std::vector<FieldBlock>& fieldContainer)
+    FieldContainer(const std::vector<FieldBlock*>& fieldContainer)
     {
         m_fieldContainer = fieldContainer;
     }
@@ -86,6 +86,7 @@ public:
     void addElement(int order, const ThreeVector& location,
         const ThreeVector& fieldStrength, double length, double edgeLength);
 
+
     /**
      * Gets the total magnetic field at a given position
      *
@@ -95,7 +96,7 @@ public:
     ThreeVector getField(const ThreeVector& position) const;
 
 private:
-    std::vector<FieldBlock> m_fieldContainer;
+    std::vector<FieldBlock*> m_fieldContainer;
     
 };
 
@@ -103,6 +104,7 @@ private:
 class Diploe: public FieldBlock
 {
 public:
+    Diploe(){};
     /**
      * Constructor used to define dipole element.
      * 
@@ -115,7 +117,7 @@ public:
     Diploe(const ThreeVector& location, const ThreeVector& fieldStrength,
         double length, double edgeLength);
 
-    ~Diploe();
+    ~Diploe(){};
 
     /**
      * Gets the magnetic field at a given position. Will be m_fieldStrength
@@ -132,6 +134,7 @@ public:
 class Quadrupole: public FieldBlock
 {
 public:
+    Quadrupole(){}
     /**
      * Constructor used to define quadrupole element.
      * 
@@ -144,7 +147,7 @@ public:
     Quadrupole(const ThreeVector& location, const ThreeVector& fieldStrength,
         double length, double edgeLength);
 
-    ~Quadrupole();
+    ~Quadrupole(){};
 
     /**
      * Gets the magnetic field at a given position. Will be m_fieldStrength

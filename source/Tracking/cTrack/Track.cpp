@@ -47,16 +47,16 @@ void Track::updateTrack(const ThreeVector &position,
         ThreeVector momK1, momK2, momK3, momK4;
         ThreeVector field;
 
-        field = m_fieldCon->getField(position);
+        field = m_fieldCont.getField(position);
         posK1 = pushPosition(momentum);
         momK1 = pushMomentum(momentum, field);   
-        field = m_fieldCon->getField(position + posK1 * dt / 2.);
+        field = m_fieldCont.getField(position + posK1 * dt / 2.);
         posK2 = pushPosition(momentum + momK1 * dt / 2.);
         momK2 = pushMomentum(momentum + momK1 * dt / 2., field);
-        field = m_fieldCon->getField(position + posK2 * dt / 2.);
+        field = m_fieldCont.getField(position + posK2 * dt / 2.);
         posK3 = pushPosition(momentum + momK2 * dt / 2.);
         momK3 = pushMomentum(momentum + momK2 * dt / 2., field);
-        field = m_fieldCon->getField(position + posK3 * dt);
+        field = m_fieldCont.getField(position + posK3 * dt);
         posK4 = pushPosition(momentum + momK3 * dt);
         momK4 = pushMomentum(momentum + momK3 * dt, field);
 

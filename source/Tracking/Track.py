@@ -213,7 +213,7 @@ class Quadrupole(FieldBlock):
     """
 
     def __init__(self, center_pos, length, gradB, direction=None,
-                 edge_length=0., field_extent=5.):
+                 edge_length=0.):
         """
         :param center_pos: Central position of the magnet.
         :param length: Length of main part of field.
@@ -222,11 +222,9 @@ class Quadrupole(FieldBlock):
             by defult
         :param edge_length: Length for field to fall by 10 %. 0 for hard edge or
             > 0 for soft edge with B0 / (1 + (z / d)**2)**2 dependence.
-        :param field_extent: Extent of field beyond the main part. Given in
-            units of edge_length.
         """
         super().__init__(center_pos, length, torch.tensor([gradB, -gradB, 0]),
-                         direction, edge_length, field_extent)
+                         direction, edge_length)
 
     def get_field(self, position):
         """
@@ -264,24 +262,4 @@ class FieldContainer:
         for element in self.field_array:
             field += element.get_field(position)
         return field
-
-
-if __name__ == "__main__":
-    gamma = 339.3 / 0.51099890221
-
-    q1 = Dipole([0, 0, 0], 0.203274830142196, -0.49051235, None, 0.01)
-    q2 = Dipole([0, 0, 1.0334], 0.203274830142196, -0.49051235, None,
-                0.01)
-    test = FieldContainer([q1, q2])
-    track = Track()
-    d0 = torch.tensor([0.09313368161783511, 0, 1])
-    r0 = torch.tensor([-0.09311173301, 0, -1])
-    time = torch.linspace(0, 10, 10000)
-    track.sim_single(test, time, r0, d0, gamma)
-    fig, ax = track.plot_track([2, 0], True)
-    #ax.set_xlim([0.2, 0.8])
-    #ax.set_ylim([1e-4, 3e-4])
-    ax.set_xlabel("z (m)")
-    ax.set_ylabel("x (m)")
-    plt.show()
 
