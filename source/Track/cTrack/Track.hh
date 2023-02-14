@@ -2,13 +2,16 @@
 #define TRACK_HH
 
 #include "ThreeVector.hh"
-#include "FieldContainer.hh"
+#include "Field.hh"
 #include <vector>
 
 class Track
 {
 public:
 
+    /**
+     * Defult constructor. All this does is set the initiliser swtiches.
+     */
     Track(){m_timeSet = false; m_initSet = false;};
 
     ~Track(){};
@@ -41,7 +44,7 @@ public:
     void setInit(const ThreeVector &position_0, const ThreeVector &direction_0,
         double gamma);
 
-    void save(std::string name);
+    // void save(std::string name);
 
 private:
 
