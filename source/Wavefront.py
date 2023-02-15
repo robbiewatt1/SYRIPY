@@ -28,10 +28,12 @@ class Wavefront(torch.nn.Module):
         self.n_samples = n_samples_xy[0] * n_samples_xy[1]
         self.delta = [(wf_bounds[1] - wf_bounds[0]) / n_samples_xy[0],
                       (wf_bounds[3] - wf_bounds[2]) / n_samples_xy[1]]
-        self.x_axis = torch.linspace(wf_bounds[0], wf_bounds[1],
-                                     n_samples_xy[0], device=device)
-        self.y_axis = torch.linspace(wf_bounds[2], wf_bounds[3],
-                                     n_samples_xy[1], device=device)
+        self.x_axis = torch.linspace(wf_bounds[0] + self.delta[0] / 2,
+                                     wf_bounds[1], n_samples_xy[0],
+                                     device=device)
+        self.y_axis = torch.linspace(wf_bounds[2] + self.delta[1] / 2,
+                                     wf_bounds[3], n_samples_xy[1],
+                                     device=device)
         self.x_array, self.y_array = torch.meshgrid(self.x_axis, self.y_axis,
                                                     indexing="ij")
         self.coords = torch.stack((self.x_array, self.y_array,
@@ -50,10 +52,12 @@ class Wavefront(torch.nn.Module):
         self.wf_bounds = self.wf_bounds * pad_fact
         self.n_samples_xy = self.n_samples_xy * pad_fact
         self.n_samples = self.n_samples_xy[0] * self.n_samples_xy[1]
-        self.x_axis = torch.linspace(self.wf_bounds[0], self.wf_bounds[1],
-                                     self.n_samples_xy[0], device=self.device)
-        self.y_axis = torch.linspace(self.wf_bounds[2], self.wf_bounds[3],
-                                     self.n_samples_xy[1], device=self.device)
+        self.x_axis = torch.linspace(wf_bounds[0] + self.delta[0] / 2,
+                                     wf_bounds[1], n_samples_xy[0],
+                                     device=device)
+        self.y_axis = torch.linspace(wf_bounds[2] + self.delta[1] / 2,
+                                     wf_bounds[3], n_samples_xy[1],
+                                     device=device)
         self.x_array, self.y_array = torch.meshgrid(self.x_axis, self.y_axis,
                                                     indexing="ij")
         self.coords = torch.stack((self.x_array, self.y_array,
@@ -78,10 +82,12 @@ class Wavefront(torch.nn.Module):
         self.wf_bounds = bounds
         self.n_samples_xy = n_samples_xy
         self.n_samples = n_samples_xy[0] * n_samples_xy[1]
-        self.x_axis = torch.linspace(self.wf_bounds[0], self.wf_bounds[1],
-                                     self.n_samples_xy[0], device=self.device)
-        self.y_axis = torch.linspace(self.wf_bounds[2], self.wf_bounds[3],
-                                     self.n_samples_xy[1], device=self.device)
+        self.x_axis = torch.linspace(wf_bounds[0] + self.delta[0] / 2,
+                                     wf_bounds[1], n_samples_xy[0],
+                                     device=device)
+        self.y_axis = torch.linspace(wf_bounds[2] + self.delta[1] / 2,
+                                     wf_bounds[3], n_samples_xy[1],
+                                     device=device)
         self.x_array, self.y_array = torch.meshgrid(self.x_axis, self.y_axis,
                                                     indexing="ij")
         self.coords = torch.stack((self.x_array, self.y_array,
@@ -181,9 +187,12 @@ class Wavefront(torch.nn.Module):
         fig, ax = plt.subplots()
         if lineout:  # 1D plot
             if lineout[0] == 0:
-                ax.plot(phase[lineout[1], :])
+                ax.plot(self.y_axis.cpu().detach().numpy(),
+                        phase[lineout[1], :])
             else:
-                ax.plot(phase[:, lineout[1]])
+                ax.plot(self.x_axis.cpu().detach().numpy(),
+                        phase[:, lineout[1]])
+
         else:  # 2D plot
             pcol = ax.pcolormesh(
                 self.x_axis.cpu().detach().numpy()[::ds_fact],
@@ -197,21 +206,3 @@ class Wavefront(torch.nn.Module):
             ax.set_ylim(axes_lim[2], axes_lim[3])
         return fig, ax
 
-    def plot_line(self):
-        if self.dims == 1:
-            intensity = (torch.abs(self.field[0, :]) ** 2.0
-                         ).cpu().detach().numpy()
-        elif self.dims == 2:
-            intensity = (torch.abs(self.field[0, :])**2.0 +
-                         torch.abs(self.field[1, :])**2.0
-                         ).cpu().detach().numpy()
-        else:
-            intensity = (torch.abs(self.field[0, :])**2.0 +
-                         torch.abs(self.field[1, :])**2.0 +
-                         torch.abs(self.field[2, :])**2.0
-                         ).cpu().detach().numpy()
-        intensity = intensity.reshape(self.n_samples_xy[0],
-                                      self.n_samples_xy[1]).T
-
-        fig, ax = plt.subplots()
-        ax.plot(intensity[1, :])
