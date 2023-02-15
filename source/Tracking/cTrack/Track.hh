@@ -4,6 +4,10 @@
 #include "ThreeVector.hh"
 #include "Field.hh"
 #include <vector>
+#include <pybind11/pybind11.h>
+#include <pybind11/numpy.h>
+
+namespace py = pybind11;
 
 class Track
 {
@@ -49,6 +53,11 @@ public:
      * @param fieldCont: Instance of field container class
      */    
     void setField(const FieldContainer& fieldCont){m_fieldCont = fieldCont;}
+
+    /**
+     * Returns the track time / position / beta as a tuple
+     */
+    py::tuple getTrack() const;
 
     //void save(std::string name);
 

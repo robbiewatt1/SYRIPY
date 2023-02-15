@@ -2,9 +2,8 @@ import numpy as np
 import torch
 import torch.linalg
 import matplotlib.pyplot as plt
+from cTrack import cTrack
 
-me = 9.1093837e-31
-qe = 1.60217663e-19
 c_light = 0.29979245
 
 
@@ -25,8 +24,6 @@ class Track(torch.nn.Module):
         self.r = None     # Particle position
         self.p = None
         self.beta = None  # Velocity along particle path
-
-        self.field_container = None
 
     def load_file(self, track_file):
         """
@@ -133,133 +130,28 @@ class Track(torch.nn.Module):
         gamma = (1.0 + torch.sum(p * p) / c_light**2.0)**0.5
         return p / gamma
 
+    def sim_single_c(self, field_container, time, r_0, d_0, gamma):
+        """
+        Models the trajectory of a single particle through a field defined
+        by field_container is cpp version (should be much much fatser)
+        :param field_container: Instance of class FieldContainer.
+        :param time: Array of times
+        :param r_0:
+        :param d_0: Initial direction of particle
+        :param gamma: Initial lorentz factor of particle
+        """
+        self.time = time
+        r0_c = cTrack.ThreeVector(r_0[0], r_0[1], r_0[2])
+        d0_c = cTrack.ThreeVector(d_0[0], d_0[1], d_0[2])
+        field = field_container.gen_c_container()
+        track = cTrack.Track()
+        track.setTime(time[0], time[-1], time.shape[0])
+        track.setInit(r0_c, d0_c, gamma)
+        track.setField(field)
+        track.simulateTrack()
+        time, r, beta = track.getTrack()
 
-class FieldBlock:
-    """
-    Base class of magnetic fields.
-    """
-    # TODO need to add the direction of the magnet
-    def __init__(self, center_pos, length, B0, direction=None, edge_length=0.):
-        """
-        :param center_pos: Central position of the magnet.
-        :param length: Length of main part of field.
-        :param B0: Field parameter vector [Units are tesla and meters.]
-        :param direction: Vector through central axis of magnet [0, 0, 1]
-            by defult
-        :param edge_length: Length for field to fall by 10 %. 0 for hard edge or
-            > 0 for soft edge with B0 / (1 + (z / d)**2)**2 dependence.
-        """
-        self.center_pos = torch.tensor(center_pos)
-        self.length = length
-        self.B0 = B0 / (me / (qe * 1.e-9))
-        self.direction = direction
-        self.edge_scaled = edge_length / (10.**0.5 - 1)**0.5
-
-    def get_field(self, position):
-        """
-        Gets the field at a given location.
-        :param position: Position of particle
-        :return: Magnetic field vector.
-        """
-        pass
-
-    def _fridge(self, b, z):
-        """
-        Calculates the fringe field at a given location.
-        :param b: Field vector at edge.
-        :param z: Distance from end of main field.
-        :return: Fringe field vector [bx, by, bz] (bx always 0)
-        """
-        return b / (1 + (z / self.edge_scaled)**2.)**2.
-
-
-class Dipole(FieldBlock):
-    """
-    Defines a dipole field. The field is a constant value inside the main length
-    and decays as
-    """
-
-    def __init__(self, center_pos, length, B0, direction=None, edge_length=0.):
-        """
-        :param center_pos: Central position of the magnet.
-        :param length: Length of main part of field.
-        :param B0: Field strength in y direction [0, B0, 0]
-        :param direction: Vector through central axis of magnet [0, 0, 1]
-            by defult
-        :param edge_length: Length for field to fall by 10 %. 0 for hard edge or
-            > 0 for soft edge with B0 / (1 + (z / d)**2)**2 dependence.
-        """
-        super().__init__(center_pos, length, torch.tensor([0, B0, 0]),
-                         direction, edge_length)
-
-    def get_field(self, position):
-        """
-        Gets the field at a given location.
-        :param position: Position of particle
-        :return: Magnetic field vector.
-        """
-        local_pos = position - self.center_pos
-        zr = torch.abs(local_pos[2]) - 0.5 * self.length
-        if zr < 0:
-            return self.B0
-        else:
-            return self._fridge(self.B0, zr)
-
-
-class Quadrupole(FieldBlock):
-    """
-    Defines a Quadrupole field. The field increases linearly off axis. Positive
-    gradient means focusing in x and negative is focusing in y.
-    """
-
-    def __init__(self, center_pos, length, gradB, direction=None,
-                 edge_length=0.):
-        """
-        :param center_pos: Central position of the magnet.
-        :param length: Length of main part of field.
-        :param gradB: Gradient of field strength.
-        :param direction: Vector through central axis of magnet [0, 0, 1]
-            by defult
-        :param edge_length: Length for field to fall by 10 %. 0 for hard edge or
-            > 0 for soft edge with B0 / (1 + (z / d)**2)**2 dependence.
-        """
-        super().__init__(center_pos, length, torch.tensor([gradB, -gradB, 0]),
-                         direction, edge_length)
-
-    def get_field(self, position):
-        """
-        Gets the field at a given location.
-        :param position: Position of particle
-        :return: Magnetic field vector.
-        """
-        local_pos = position - self.center_pos
-        zr = torch.abs(local_pos[2]) - 0.5 * self.length
-        if zr < 0:
-            return self.B0 * local_pos[[1, 0, 2]]
-        else:
-            return self._fridge(self.B0 * local_pos[[1, 0, 2]], zr)
-
-
-class FieldContainer:
-    """
-    class containing a list of all defined magnetic elements. Will return the
-    field for any given location.
-    """
-
-    def __init__(self, field_array):
-        """
-        :param field_array: A list containing all the defined elements.
-        """
-        self.field_array = field_array
-
-    def get_field(self, position):
-        """
-        Finds which element we are in and returns field
-        :param position: Position of particle
-        :return: Magnetic field vector.
-        """
-        field = torch.zeros_like(position)
-        for element in self.field_array:
-            field += element.get_field(position)
-        return field
-
+        # Transpose for field solver and switch device
+        self.time = torch.tensor(time).to(self.device)
+        self.r = torch.tensor(r).to(self.device).T
+        self.beta = torch.tensor(beta).to(self.device).T

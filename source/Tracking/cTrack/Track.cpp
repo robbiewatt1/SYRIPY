@@ -1,6 +1,9 @@
 #include "Track.hh"
 #include "ThreeVector.hh"
 #include <fstream>
+#include <pybind11/stl.h>
+
+namespace py = pybind11;
 
 void Track::simulateTrack()
 {
@@ -80,6 +83,32 @@ ThreeVector Track::pushMomentum(const ThreeVector &momentum,
 {
     double gamma  = std::sqrt(1.0 + momentum.Mag2() / (c_light * c_light));
     return -1 * momentum.Cross(field) / gamma;
+}
+
+py::tuple Track::getTrack() const
+{
+
+    int samples = m_time.size();
+    py::array_t<double> time_p = py::cast(m_time);
+    std::vector<double> position_c(3 * samples);
+    for(int i = 0; i < samples; i++)
+    {
+        position_c[3*i] = m_position[i][0];
+        position_c[3*i+1] = m_position[i][1];
+        position_c[3*i+2] = m_position[i][2];
+    }
+    py::array_t<double> position_p = py::cast(position_c);
+    position_p.resize({samples, 3});
+    std::vector<double> beta_c(3 * samples);
+    for(int i = 0; i < samples; i++)
+    {
+        beta_c[3*i] = m_beta[i][0];
+        beta_c[3*i+1] = m_beta[i][1];
+        beta_c[3*i+2] = m_beta[i][2];
+    }
+    py::array_t<double> beta_p = py::cast(beta_c);
+    beta_p.resize({samples, 3});
+    return py::make_tuple(time_p, position_p, beta_p);
 }
 
 /*

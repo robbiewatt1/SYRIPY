@@ -11,12 +11,15 @@ PYBIND11_MODULE(cTrack, module)
 {
     py::class_<Track>(module, "Track")
         .def(py::init<>())
-        .def("simulateTrack", &Track::simulateTrack, "Main function to simualte"
-        	"the track of a single electron")
-        .def("setTime", &Track::setTime, "Sets the time paramters for"
+        .def("simulateTrack", &Track::simulateTrack, "Main function to"
+            "simulate the track of a single electron")
+        .def("setTime", &Track::setTime, "Sets the time parameters for "
         	"the simulation")
-        .def("setInit", &Track::setTime, "Sets the initial paramters for"
-        	"the simulation");
+        .def("setInit", &Track::setInit, "Sets the initial parameters fo r"
+        	"the simulation")
+        .def("setField", &Track::setField, "Sets the field container for the"
+            "solver.")
+        .def("getTrack", &Track::getTrack, "Returns the track data t / r / b");
 
     py::class_<FieldContainer>(module, "FieldContainer")
         .def(py::init<>())
