@@ -32,19 +32,14 @@ class EdgeRadSolver(torch.nn.Module):
         along x dimension at y=0.
         :param new_samples: Number of new samples along trajectory
         :param n_sample_x: Approximate number of test sample points in x
-        :flat_power power to which the objective function is raised. This
+        :param flat_power: Power to which the objective function is raised. This
         increases the number of samples in the noisy bit.
         """
-
-        # TODO change from down sampling time step to interpolating over path
 
         if n_sample_x:
             sample_rate = int(self.wavefront.n_samples_xy[0] / n_sample_x)
         else:
             sample_rate = 1
-
-        # Store initial samples to print reduction
-        init_samples = self.track.time.shape[0]
 
         # Calculate grad(1/ grad(phi)) at sample_x points.
         start_index = self.wavefront.n_samples_xy[1] // 2
@@ -72,23 +67,14 @@ class EdgeRadSolver(torch.nn.Module):
         self.track.beta = CubicInterp(cumulative_obj.repeat(3, 1),
                                     self.track.beta)(track_samples.repeat(3, 1))
 
-        start_index = self.wavefront.n_samples_xy[1] // 2
-        r_obs = self.wavefront.coords[
-                :, start_index::self.wavefront.n_samples_xy[1]*sample_rate,
-                None] - self.track.r[:, None, :]
-        r_norm = torch.linalg.norm(r_obs, dim=0)
-        phase_samples = self.track.time[None, :] + r_norm / c_light
-        phase_grad = torch.gradient(phase_samples,
-                                    spacing=(self.track.time,), dim=1)[0]
-        grad_inv_grad = torch.gradient(1. / phase_grad,
-                                    spacing=(self.track.time,), dim=1)[0]
-
-    def solve(self, blocks=1):
+    def solve(self, blocks=1, solve_ends=True):
         """
         Main function to solve the radiation field at the wavefront.
         Interaction limits must be within time array of track
         :param blocks: Number of blocks to split calculation. Increasing this
          will reduce memory but slow calculation
+        :param solve_ends: If true the integration is extended to +/- inf using
+         an asymptotic expansion.
         """
 
         # Check array divides evenly into blocks
@@ -125,56 +111,34 @@ class EdgeRadSolver(torch.nn.Module):
             int2 = c_light * n_dir / (self.wavefront.omega * r_norm**2.0
                                       * phase_grad)
 
+            # Solve main part of integral
             real_part = (self.filon_cos(phase, int1, self.wavefront.omega)
                          + self.filon_sin(phase, int2, self.wavefront.omega))
             imag_part = (self.filon_sin(phase, int1, self.wavefront.omega)
                          - self.filon_cos(phase, int2, self.wavefront.omega))
+
+            # Solve end points to inf
+            if solve_ends:
+                real_part += (torch.cos(self.wavefront.omega * phase[..., 0])
+                              * int2[..., 0]
+                              - torch.cos(self.wavefront.omega * phase[..., -1])
+                              * int2[..., -1]
+                              + torch.sin(self.wavefront.omega * phase[..., 0])
+                              * int1[..., 0]
+                              - torch.sin(self.wavefront.omega * phase[..., -1])
+                              * int1[..., -1]) / self.wavefront.omega
+                imag_part += (torch.cos(self.wavefront.omega * phase[..., -1])
+                              * int1[..., -1]
+                              - torch.cos(self.wavefront.omega * phase[..., 0])
+                              * int1[..., 0]
+                              - torch.sin(self.wavefront.omega * phase[..., -1])
+                              * int2[..., -1]
+                              + torch.sin(self.wavefront.omega * phase[..., 0])
+                              * int2[..., 0]) / self.wavefront.omega
+
             self.wavefront.field[:, bi:bf] = (real_part + 1j * imag_part) \
                                 * torch.exp(1j * self.wavefront.omega *
                                             phase0)
-
-    @staticmethod
-    def solve_edge(t, t_0, beta_0, r_0, omega):
-        """
-        Calculates the integral of the end parts in free space.
-        :param t: Current time
-        :param t_0: Time when beta and r are defined
-        :param beta_0: Velocity of particle at t=0
-        :param r_0: Position of particle at t=0
-        :param omega: Oscillation frequency
-        :return: Real and imaginary parts (real, imag)
-        """
-        b2 = (beta_0**2).sum()
-        rb = (r_0 * beta_0).sum()
-        r2 = (r_0**2.0).sum()
-        r_n = r2**0.5
-        n = r_0 / r_n
-        phase = t + r_n / c_light
-        t = t - t_0
-
-        # Calculate phase gradient
-        r_grad = (b2 * t + rb) / r_n
-        n_grad = (beta_0 * r_n - r_grad * r_0) / r2
-        phase_grad = 1 + r_grad / c_light
-        phase_grad_2nd = (b2 * r2 - rb**2) / (c_light * r_n**3)
-        func_real = (beta_0 - n) / r_n
-        func_imag = - n * c_light / (omega * r_n**2.0)
-
-        func_grad_real = -beta_0 * r_grad / r2 - (n_grad * r_n - r_grad * n) \
-                         / r2
-        func_grad_imag = - c_light * (n_grad * r2 - 2 * r_n * r_grad * n) \
-                    / (r2**2 * omega)
-
-        real_part = (func_grad_real * phase_grad - func_real * phase_grad_2nd) \
-                    / (omega**2.0 * phase_grad**3) + func_imag / (omega *
-                                                                  phase_grad)
-        imag_part = (func_grad_imag * phase_grad - func_imag * phase_grad_2nd) \
-                    / (omega**2.0 * phase_grad**3) - func_real / (omega *
-                                                                  phase_grad)
-        return (real_part * np.cos(omega * phase)
-                - imag_part * np.sin(omega * phase),
-                imag_part * np.cos(omega * phase)
-                + real_part * np.sin(omega * phase))
 
     def filon_sin(self, x_samples, f_samples, omega):
         """
