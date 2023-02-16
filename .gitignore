@@ -5,4 +5,3 @@ build/
 *.so
 *.npy
 _skbuild/
-examples/
