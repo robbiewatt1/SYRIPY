@@ -1,5 +1,5 @@
 import torch
-from cTrack import cTrack
+from .cTrack import cTrack
 
 
 me = 9.1093837e-31

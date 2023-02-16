@@ -1,6 +1,8 @@
 .idea
 **/__pycache__
 build/
-ERS.egg-info/
+*.egg-info*
 *.so
 *.npy
+_skbuild/
+examples/

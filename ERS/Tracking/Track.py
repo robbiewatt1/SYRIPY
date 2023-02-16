@@ -2,7 +2,8 @@ import numpy as np
 import torch
 import torch.linalg
 import matplotlib.pyplot as plt
-from cTrack import cTrack
+import os
+from .cTrack import cTrack
 
 c_light = 0.29979245
 

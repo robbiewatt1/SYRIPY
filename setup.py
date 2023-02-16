@@ -1,4 +1,7 @@
-from setuptools import setup
+from skbuild import setup
+from setuptools import find_packages
+from setuptools.command.install import install
+
 
 setup(
     name='ERS',
@@ -7,8 +10,8 @@ setup(
                 'edge radiation ',
     author='Robbie Watt',
     author_email='rwatt1@stanford.edu',
-    packages=['ERS'],
-    package_dir={'ERS': 'source'},
+    packages=find_packages(),
+    cmake_install_dir="ERS/Tracking/cTrack",
     install_requires=[
         'numpy',
         'matplotlib',

@@ -2,13 +2,12 @@ import numpy as np
 import torch
 
 
-# Todo Change everything so that polarisation axis is the first.
-#  Also change things so that the field is saved as a 2d array rather than 1
+#TODO Change things so that the field is saved as a 2d array rather than 1
 
 c_light = 0.29979245
 
 
-class EdgeRadSolver(torch.nn.Module):
+class FieldSolver(torch.nn.Module):
     """
     Class which solves the Liénard–Wiechert field at a wavefront for a given
     particle trajectory.

@@ -52,12 +52,12 @@ class Wavefront(torch.nn.Module):
         self.wf_bounds = self.wf_bounds * pad_fact
         self.n_samples_xy = self.n_samples_xy * pad_fact
         self.n_samples = self.n_samples_xy[0] * self.n_samples_xy[1]
-        self.x_axis = torch.linspace(wf_bounds[0] + self.delta[0] / 2,
-                                     wf_bounds[1], n_samples_xy[0],
-                                     device=device)
-        self.y_axis = torch.linspace(wf_bounds[2] + self.delta[1] / 2,
-                                     wf_bounds[3], n_samples_xy[1],
-                                     device=device)
+        self.x_axis = torch.linspace(self.wf_bounds[0] + self.delta[0] / 2,
+                                     self.wf_bounds[1], self.n_samples_xy[0],
+                                     device=self.device)
+        self.y_axis = torch.linspace(self.wf_bounds[2] + self.delta[1] / 2,
+                                     self.wf_bounds[3], self.n_samples_xy[1],
+                                     device=self.device)
         self.x_array, self.y_array = torch.meshgrid(self.x_axis, self.y_axis,
                                                     indexing="ij")
         self.coords = torch.stack((self.x_array, self.y_array,
@@ -82,12 +82,12 @@ class Wavefront(torch.nn.Module):
         self.wf_bounds = bounds
         self.n_samples_xy = n_samples_xy
         self.n_samples = n_samples_xy[0] * n_samples_xy[1]
-        self.x_axis = torch.linspace(wf_bounds[0] + self.delta[0] / 2,
-                                     wf_bounds[1], n_samples_xy[0],
-                                     device=device)
-        self.y_axis = torch.linspace(wf_bounds[2] + self.delta[1] / 2,
-                                     wf_bounds[3], n_samples_xy[1],
-                                     device=device)
+        self.x_axis = torch.linspace(self.wf_bounds[0] + self.delta[0] / 2,
+                                     self.wf_bounds[1], self.n_samples_xy[0],
+                                     device=self.device)
+        self.y_axis = torch.linspace(self.wf_bounds[2] + self.delta[1] / 2,
+                                     self.wf_bounds[3], self.n_samples_xy[1],
+                                     device=self.device)
         self.x_array, self.y_array = torch.meshgrid(self.x_axis, self.y_axis,
                                                     indexing="ij")
         self.coords = torch.stack((self.x_array, self.y_array,
