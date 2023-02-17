@@ -147,10 +147,10 @@ class Track(torch.nn.Module):
         field = field_container.gen_c_container()
         track = cTrack.Track()
         track.setTime(time[0], time[-1], time.shape[0])
-        track.setInit(r0_c, d0_c, gamma)
+        track.setCentralInit(r0_c, d0_c, gamma)
         track.setField(field)
-        track.simulateTrack()
-        time, r, beta = track.getTrack()
+        time, r, beta = track.simulateTrack()
+        #track.getTrack()
 
         # Transpose for field solver and switch device
         self.time = torch.tensor(time).to(self.device)

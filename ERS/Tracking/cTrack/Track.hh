@@ -25,7 +25,9 @@ public:
      * direction / poition / time information to be set before running. Updates
      * the m_position / m_monetum / m_beta vectors.
      */
-    void simulateTrack();
+    py::tuple simulateTrack();
+
+    void simulateBeam();
 
     /**
      * Sets the time paramters for tracking.
@@ -38,15 +40,30 @@ public:
         long unsigned int time_steps);
 
     /**
-     * Sets the initial paramters of the track, i.e. the position, direction
-     * and gamma factor.
+     * Sets the initial paramters of the central track, i.e. the position,
+     * direction and gamma factor.
      *
      * @param position_0: Initial position of the track.
      * @param direction_0: Initial direction of the track
      * @param gamma: Lorentz factor of electron.
      */
-    void setInit(const ThreeVector &position_0, const ThreeVector &direction_0,
-        double gamma);
+    void setCentralInit(const ThreeVector &position_0,
+        const ThreeVector &direction_0,double gamma);
+
+    /**
+     * Sets the second order moments of the beam distribution function. We 
+     * assume no corolation in x / y / energy. The elemtns of moments are:
+     * m[0] = s_x^2
+     * m[1] = s_x s_x'
+     * m[2] = s_x'^2
+     * m[3] = s_y^2
+     * m[4] = s_y s_y'
+     * m[5] = s_y'^2
+     * m[6] = s_g^2
+     *
+     * @param moments: Numpy array of second order moments
+     */
+    void setBeamParams(py::array_t<double>& moments);
 
     /**
      * Sets the field container for the solver.
@@ -57,9 +74,6 @@ public:
     /**
      * Returns the track time / position / beta as a tuple
      */
-    py::tuple getTrack() const;
-
-    //void save(std::string name);
 
 private:
 
@@ -71,8 +85,9 @@ private:
      * @param dt: Time step for integration.
      * @param index: Current step index of integration. 
      */
-    void updateTrack(const ThreeVector &position, const ThreeVector &momentum,
-        double dt, int index);
+    void updateTrack(std::vector<ThreeVector>& position,
+        std::vector<ThreeVector>& momentum, std::vector<ThreeVector>& beta, 
+        int index);
 
     /**
      * Used to update the position of the electron.
@@ -92,16 +107,15 @@ private:
     ThreeVector pushMomentum(const ThreeVector &momentum, 
         const ThreeVector &field) const;
 
-    // Initial electron param,ters
+    // Initial centeral paramters
     double m_gamma;
     ThreeVector m_initPosition;
     ThreeVector m_initDirection;
 
-    // Electron track vectors
+    // Time params
+    double m_dt;
     std::vector<double> m_time;
-    std::vector<ThreeVector> m_position;
-    std::vector<ThreeVector> m_momentum;
-    std::vector<ThreeVector> m_beta;
+
 
     // Container class of magnetic field
     FieldContainer m_fieldCont;
@@ -112,5 +126,33 @@ private:
     static constexpr double c_light = 0.299792458;
 };
 
+
+struct normal_random_variable
+{
+    normal_random_variable(Eigen::MatrixXd const& covar)
+        : normal_random_variable(Eigen::VectorXd::Zero(covar.rows()), covar)
+    {}
+
+    normal_random_variable(Eigen::VectorXd const& mean, 
+        Eigen::MatrixXd const& covar)
+        : mean(mean)
+    {
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigenSolver(covar);
+        transform = eigenSolver.eigenvectors() 
+            * eigenSolver.eigenvalues().cwiseSqrt().asDiagonal();
+    }
+
+    Eigen::VectorXd mean;
+    Eigen::MatrixXd transform;
+
+    Eigen::VectorXd operator()() const
+    {
+        static std::mt19937 gen{ std::random_device{}() };
+        static std::normal_distribution<> dist;
+
+        return mean + transform * Eigen::VectorXd{
+            mean.size() }.unaryExpr([&](auto x) { return dist(gen); });
+    }
+};
 
 #endif

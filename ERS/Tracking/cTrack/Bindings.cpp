@@ -15,11 +15,12 @@ PYBIND11_MODULE(cTrack, module)
             "simulate the track of a single electron")
         .def("setTime", &Track::setTime, "Sets the time parameters for "
         	"the simulation")
-        .def("setInit", &Track::setInit, "Sets the initial parameters fo r"
+        .def("setCentralInit", &Track::setCentralInit, "Sets the initial parameters fo r"
         	"the simulation")
+        .def("setBeamParams", &Track::setBeamParams, "Sets the beam parameters."
+            "for the simulation")
         .def("setField", &Track::setField, "Sets the field container for the"
-            "solver.")
-        .def("getTrack", &Track::getTrack, "Returns the track data t / r / b");
+            "solver.");
 
     py::class_<FieldContainer>(module, "FieldContainer")
         .def(py::init<>())
