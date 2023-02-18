@@ -23,8 +23,11 @@ class Track(torch.nn.Module):
         self.device = device
         self.time = None  # Proper time along particle path
         self.r = None     # Particle position
-        self.p = None
+        self.p = None     # Particle momentum
         self.beta = None  # Velocity along particle path
+
+        self.bunch_r = None # bunch position
+        self.bunch_beta = None  # Bunch beta
 
     def load_file(self, track_file):
         """
@@ -137,7 +140,7 @@ class Track(torch.nn.Module):
         by field_container is cpp version (should be much much fatser)
         :param field_container: Instance of class FieldContainer.
         :param time: Array of times
-        :param r_0:
+        :param r_0: Initial position of particle
         :param d_0: Initial direction of particle
         :param gamma: Initial lorentz factor of particle
         """
@@ -150,9 +153,38 @@ class Track(torch.nn.Module):
         track.setCentralInit(r0_c, d0_c, gamma)
         track.setField(field)
         time, r, beta = track.simulateTrack()
-        #track.getTrack()
 
         # Transpose for field solver and switch device
         self.time = torch.tensor(time).to(self.device)
         self.r = torch.tensor(r).to(self.device).T
         self.beta = torch.tensor(beta).to(self.device).T
+
+    def sim_bunch_c(self, n_part, field_container, time, r_0, d_0, gamma, bunch_params):
+        """
+        Models the trajectory of a single particle through a field defined
+        by field_container is cpp version (should be much much fatser)
+        :param n_part: Number of particles to simulate
+        :param field_container: Instance of class FieldContainer.
+        :param time: Array of times
+        :param r_0:
+        :param d_0: Initial direction of particle
+        :param gamma: Initial lorentz factor of particle
+        :param bunch_params: np.array of 2nd order moments in the format:
+         [sig_x, sig_x_xp, sig_xp, sig_x, sig_y_yp, sig_yp, sig_gamma]
+        """
+        self.time = time
+        r0_c = cTrack.ThreeVector(r_0[0], r_0[1], r_0[2])
+        d0_c = cTrack.ThreeVector(d_0[0], d_0[1], d_0[2])
+        field = field_container.gen_c_container()
+        track = cTrack.Track()
+        track.setTime(time[0], time[-1], time.shape[0])
+        track.setCentralInit(r0_c, d0_c, gamma)
+        track.setBeamParams(bunch_params)
+        track.setField(field)
+        time, r, beta = track.simulateBeam(n_part)
+
+        #TODO Check that shape is right
+        # Transpose for field solver and switch device
+        self.time = torch.tensor(time).to(self.device)
+        self.r = torch.tensor(r).to(self.device)
+        self.beta = torch.tensor(beta).to(self.device)

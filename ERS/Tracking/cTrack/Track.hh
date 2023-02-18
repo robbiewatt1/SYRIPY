@@ -2,10 +2,15 @@
 #define TRACK_HH
 
 #include "ThreeVector.hh"
+#include "ThreeMatrix.hh"
 #include "Field.hh"
 #include <vector>
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
+
+#include <Eigen/Dense>
+#include <random>
+
 
 namespace py = pybind11;
 
@@ -14,33 +19,39 @@ class Track
 public:
 
     /**
-     * Defult constructor. All this does is set the initiliser swtiches.
+     * Default constructor. All this does is set the initialise switches.
      */
     Track(){m_timeSet = false; m_initSet = false;};
 
     ~Track(){};
 
     /**
-     * Main function, Simulates the track of an electron. Requires the
-     * direction / poition / time information to be set before running. Updates
-     * the m_position / m_monetum / m_beta vectors.
+     * Main function for simulating the track of a single electron. Requires the
+     * direction / position / time information to be set before running. Returns
+     * track data.
+     * @return Tuple of np.arrays (time, position, beta) 
      */
     py::tuple simulateTrack();
 
-    void simulateBeam();
+    /**
+     * Main function for simulating multiple electrons (i.e. beam). Requires the
+     * direction / position / time / beam param information to be set before
+     * running. Updates the m_position / m_momentum / m_beta vectors.
+     */
+    py::tuple simulateBeam(int nPart);
 
     /**
-     * Sets the time paramters for tracking.
+     * Sets the time parameters for tracking.
      * 
      * @param time_init: Initial time of the track.
      * @param time_end: End time of the track.
-     * @param time_steps: Number of intergation steps.
+     * @param time_steps: Number of integration steps.
      */
     void setTime(double time_init, double time_end, 
         long unsigned int time_steps);
 
     /**
-     * Sets the initial paramters of the central track, i.e. the position,
+     * Sets the initial parameters of the central track, i.e. the position,
      * direction and gamma factor.
      *
      * @param position_0: Initial position of the track.
@@ -52,7 +63,7 @@ public:
 
     /**
      * Sets the second order moments of the beam distribution function. We 
-     * assume no corolation in x / y / energy. The elemtns of moments are:
+     * assume no correlation in x / y / energy. The elements of moments are:
      * m[0] = s_x^2
      * m[1] = s_x s_x'
      * m[2] = s_x'^2
@@ -81,7 +92,7 @@ private:
      * Performs a single update set using an rk4 method. 
      *
      * @param position: Previous position of the electron.
-     * @param momentum: Previous momeumtum of the electron.
+     * @param momentum: Previous momentum of the electron.
      * @param dt: Time step for integration.
      * @param index: Current step index of integration. 
      */
@@ -92,7 +103,7 @@ private:
     /**
      * Used to update the position of the electron.
      *
-     * @param momentum: Current momeumtum of the electron.
+     * @param momentum: Current momentum of the electron.
      * @return Gradient of the position.
      */
     ThreeVector pushPosition(const ThreeVector &momentum) const;
@@ -100,21 +111,25 @@ private:
     /**
      * Used to update the momentum of the electron.
      *
-     * @param momentum: Current momeumtum of the electron.
+     * @param momentum: Current momentum of the electron.
      * @param field: Current magnetic field experienced by the electron.
-     * @return Gradient of the mometum.
+     * @return Gradient of the momentum.
      */
     ThreeVector pushMomentum(const ThreeVector &momentum, 
         const ThreeVector &field) const;
 
-    // Initial centeral paramters
+    // Initial central parameters
     double m_gamma;
-    ThreeVector m_initPosition;
-    ThreeVector m_initDirection;
+    ThreeVector m_initPositionCent;
+    ThreeVector m_initDirectionCent;
 
     // Time params
     double m_dt;
     std::vector<double> m_time;
+
+    // Beam params and rotation
+    std::vector<double> m_beamParams;
+    ThreeMatrix m_rotation;
 
 
     // Container class of magnetic field

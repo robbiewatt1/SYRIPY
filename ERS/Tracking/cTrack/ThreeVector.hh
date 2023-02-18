@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cassert>
 
+#include "ThreeMatrix.hh"
 
 class ThreeVector
 {
@@ -14,7 +15,7 @@ class ThreeVector
 */
 
 public:
-	// Defult Constructor
+	// Default Constructor
 	ThreeVector()
 	{
 		m_data[0] = 0;
@@ -43,7 +44,7 @@ public:
 	{
 	}
 
-	// Prints the vector to the screan
+	// Prints the vector to the screen
 	void Print() const
 	{
 		std::cout << "[" << m_data[0] << ", " << m_data[1] << ", " 
@@ -87,7 +88,7 @@ public:
 		return Dot(*this);
 	}
 
-	// Returns the unit vector pointing from frim this to point
+	// Returns the unit vector pointing from from this to point
 	ThreeVector Direction(const ThreeVector& point) const
 	{
 		ThreeVector dir;
@@ -99,6 +100,39 @@ public:
 	}
 
 
+	// Returns the matrix required to rotate the vector onto the second
+	ThreeMatrix RotateToAxis(const ThreeVector& axis) const
+	{
+		ThreeMatrix rotation;
+		// Fist we need to check if the vectors are anti parallel as this method fails
+		if ((this->Norm() + axis.Norm()).Mag2() <= 1e-10)
+		{
+			rotation[0][0] = -1.0;
+			rotation[1][1] =  1.0;
+			rotation[2][2] = -1.0;
+		} else
+		{
+			ThreeVector norm1 = this->Norm();
+			ThreeVector norm2 = axis.Norm();
+			ThreeVector crossVec = norm1.Cross(norm2);
+
+			double cos = norm1.Dot(norm2);
+			ThreeMatrix skewMat;
+			skewMat[0][1] = -crossVec[2];
+			skewMat[0][2] =  crossVec[1];
+			skewMat[1][0] =  crossVec[2];
+			skewMat[1][2] = -crossVec[0];
+			skewMat[2][0] = -crossVec[1];
+			skewMat[2][1] =  crossVec[0];
+
+			ThreeMatrix ident;
+			ident.Identity();
+			rotation = ident + skewMat + skewMat * skewMat * (1.0 / (1.0 + cos));
+		}
+		return rotation;
+	}
+
+
 	// Returns the value of the vector at elementIndex. This method allows 
 	// you to edit the vector data.
 	double& operator[](unsigned int index)
@@ -107,18 +141,18 @@ public:
 		return m_data[index];
 	}
 
-	// Same as above but thish time you can't edit.
+	// Same as above but this time you can't edit.
 	double operator[](unsigned int index) const
 	{
 		assert(index >= 0 && index < 3);
 		return m_data[index];
 	}
 
-	// Copy vecotor to new vector
+	// Copy vector to new vector
 	ThreeVector& operator=(const ThreeVector &vector)
 	{
 
-		// Self assigment gaurd
+		// Self assignment guard
 		if (this == &vector)
 		{
 			return *this;
@@ -244,6 +278,19 @@ public:
 		return newVector;
 	};
 
+	friend ThreeVector operator*(const ThreeMatrix &matrix, const ThreeVector &vector)
+	{
+		ThreeVector newVector;
+		for (unsigned int i = 0; i < 3; i++)
+		{
+			for (unsigned int j = 0; j < 3; j++)
+			{
+				newVector[i] += matrix[i][j] * vector[j];
+
+			}
+		}
+		return newVector;
+	}
 
 private:
 	double m_data[3];

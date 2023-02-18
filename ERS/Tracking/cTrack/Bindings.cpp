@@ -12,7 +12,9 @@ PYBIND11_MODULE(cTrack, module)
     py::class_<Track>(module, "Track")
         .def(py::init<>())
         .def("simulateTrack", &Track::simulateTrack, "Main function to"
-            "simulate the track of a single electron")
+            "simulate the track of a single electron.")
+        .def("simulateBeam", &Track::simulateBeam, "Main function to"
+            "simulate a beam of particles.")
         .def("setTime", &Track::setTime, "Sets the time parameters for "
         	"the simulation")
         .def("setCentralInit", &Track::setCentralInit, "Sets the initial parameters fo r"

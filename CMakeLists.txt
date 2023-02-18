@@ -14,8 +14,13 @@ if(SKBUILD)
   list(APPEND CMAKE_PREFIX_PATH "${_tmp_dir}")
 endif()
 
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -fopenmp")
+
+find_package (Eigen3 3.3 REQUIRED NO_MODULE)
 find_package(pybind11 CONFIG REQUIRED)
+
 pybind11_add_module(cTrack MODULE  ERS/Tracking/cTrack/Bindings.cpp
- ERS/Tracking/cTrack/Field.cpp ERS/Tracking/cTrack/Track.cpp)
+ ERS/Tracking/cTrack/Field.cpp ERS/Tracking/cTrack/Track.cpp )
+target_link_libraries(cTrack PRIVATE Eigen3::Eigen)
 
 install(TARGETS cTrack LIBRARY DESTINATION .)
