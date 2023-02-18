@@ -32,10 +32,16 @@ public:
 		}
 	}
 
-	void Ideneity()
+	void Identity()
 	{
 		m_data[0] = 1.0;
+		m_data[1] = 0.0;
+		m_data[2] = 0.0;
+		m_data[3] = 0.0;
 		m_data[4] = 1.0;
+		m_data[4] = 0.0;
+		m_data[6] = 0.0;
+		m_data[7] = 0.0;
 		m_data[8] = 1.0;
 	}
 
