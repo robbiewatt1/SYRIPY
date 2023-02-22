@@ -76,6 +76,7 @@ py::tuple Track::simulateBeam(int nPart)
     g_covar << m_beamParams[6];
     normal_random_variable g_gen { g_covar };
 
+
 #ifdef _OPENMP
     #pragma omp parallel for
 #endif
@@ -97,7 +98,7 @@ py::tuple Track::simulateBeam(int nPart)
         ThreeVector init_direction = ThreeVector(std::tan(x_sample[1]) / alpha,
                                                  std::tan(y_sample[1]) / alpha,
                                                  1 / alpha);
-        
+
         // Rotate direction and position  to main axis
         init_position = m_rotation * init_position + m_initPositionCent;
         init_direction = m_rotation * init_direction;

@@ -39,7 +39,7 @@ public:
 		m_data[2] = 0.0;
 		m_data[3] = 0.0;
 		m_data[4] = 1.0;
-		m_data[4] = 0.0;
+		m_data[5] = 0.0;
 		m_data[6] = 0.0;
 		m_data[7] = 0.0;
 		m_data[8] = 1.0;
@@ -83,7 +83,6 @@ public:
 		inverse.m_data[6] = m_data[3] * m_data[7] - m_data[4] * m_data[6];
 		inverse.m_data[7] = m_data[1] * m_data[6] - m_data[0] * m_data[7];
 		inverse.m_data[8] = m_data[0] * m_data[4] - m_data[1] * m_data[3];
-
 		return inverse * (1.0 / Determinant());
 	}
 

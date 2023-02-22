@@ -186,5 +186,5 @@ class Track(torch.nn.Module):
         #TODO Check that shape is right
         # Transpose for field solver and switch device
         self.time = torch.tensor(time).to(self.device)
-        self.r = torch.tensor(r).to(self.device)
-        self.beta = torch.tensor(beta).to(self.device)
+        self.bunch_r = torch.tensor(r).to(self.device)
+        self.bunch_beta = torch.tensor(beta).to(self.device)
