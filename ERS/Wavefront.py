@@ -119,6 +119,9 @@ class Wavefront(torch.nn.Module):
         self.field = new_field
         self.dims = new_dims
 
+    def copy(self):
+        
+
     def plot_intensity(self, log_plot=False, axes_lim=None, ds_fact=1,
                        lineout=None):
         """

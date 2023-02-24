@@ -26,7 +26,8 @@ class Track(torch.nn.Module):
         self.p = None     # Particle momentum
         self.beta = None  # Velocity along particle path
 
-        self.bunch_r = None # bunch position
+        self.bunch_time = None # Bunch time samples
+        self.bunch_r = None  # bunch position
         self.bunch_beta = None  # Bunch beta
 
     def load_file(self, track_file):
@@ -159,10 +160,11 @@ class Track(torch.nn.Module):
         self.r = torch.tensor(r).to(self.device).T
         self.beta = torch.tensor(beta).to(self.device).T
 
-    def sim_bunch_c(self, n_part, field_container, time, r_0, d_0, gamma, bunch_params):
+    def sim_bunch_c(self, n_part, field_container, time, r_0, d_0, gamma,
+                    bunch_params):
         """
         Models the trajectory of a single particle through a field defined
-        by field_container is cpp version (should be much much fatser)
+        by field_container is cpp version (should be much much faster)
         :param n_part: Number of particles to simulate
         :param field_container: Instance of class FieldContainer.
         :param time: Array of times
@@ -172,7 +174,7 @@ class Track(torch.nn.Module):
         :param bunch_params: np.array of 2nd order moments in the format:
          [sig_x, sig_x_xp, sig_xp, sig_x, sig_y_yp, sig_yp, sig_gamma]
         """
-        self.time = time
+        self.bunch_time = time
         r0_c = cTrack.ThreeVector(r_0[0], r_0[1], r_0[2])
         d0_c = cTrack.ThreeVector(d_0[0], d_0[1], d_0[2])
         field = field_container.gen_c_container()
@@ -183,8 +185,14 @@ class Track(torch.nn.Module):
         track.setField(field)
         time, r, beta = track.simulateBeam(n_part)
 
-        #TODO Check that shape is right
+        # TODO Check that shape is right
+
         # Transpose for field solver and switch device
-        self.time = torch.tensor(time).to(self.device)
-        self.bunch_r = torch.tensor(r).to(self.device)
-        self.bunch_beta = torch.tensor(beta).to(self.device)
+        self.bunch_time = torch.tensor(self.bunch_time).to(self.device)
+        self.bunch_r = torch.tensor(r.transpose((0, 2, 1))).to(self.device)
+        self.bunch_beta = torch.tensor(beta.transpose((0, 2, 1))).to(
+            self.device)
+
+        print(self.bunch_time.shape)
+        print(self.bunch_r.shape)
+        print(self.bunch_beta.shape)

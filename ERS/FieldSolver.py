@@ -1,8 +1,8 @@
-import numpy as np
 import torch
 
 
-#TODO Change things so that the field is saved as a 2d array rather than 1
+# TODO Change things so that the field is saved as a 2d array rather than 1
+# TODO Add checks to make sure track has already been solved
 
 c_light = 0.29979245
 
@@ -66,7 +66,25 @@ class FieldSolver(torch.nn.Module):
         self.track.beta = CubicInterp(cumulative_obj.repeat(3, 1),
                                     self.track.beta)(track_samples.repeat(3, 1))
 
-    def solve(self, blocks=1, solve_ends=True):
+    def set_bunch_dt(self):
+        """
+        Updates the samples for the bunch track. Assume set_dt has already
+         been set.
+        """
+
+        if self.track.bunch_r is None:
+            raise Exception("Bunch track must be set before updating samples, "
+                            "i.e call sim_bunch_c")
+
+        samples = self.track.bunch_r.shape[:2]
+        self.track.bunch_r = CubicInterp(
+            self.track.bunch_time.repeat(*samples, 1),
+            self.track.bunch_r)(self.track.time.repeat(*samples, 1))
+        self.track.bunch_beta = CubicInterp(
+            self.track.bunch_time.repeat(*samples, 1),
+            self.track.bunch_beta)(self.track.time.repeat(*samples, 1))
+
+    def solve(self, blocks=1, solve_ends=True, return_field=False):
         """
         Main function to solve the radiation field at the wavefront.
         Interaction limits must be within time array of track
@@ -74,6 +92,8 @@ class FieldSolver(torch.nn.Module):
          will reduce memory but slow calculation
         :param solve_ends: If true the integration is extended to +/- inf using
          an asymptotic expansion.
+        :param return_field: If true the field is returned rather than
+         updating the wavefront.
         """
 
         # Check array divides evenly into blocks
@@ -81,6 +101,11 @@ class FieldSolver(torch.nn.Module):
             raise Exception("Observation array does not divide evenly into "
                             f"blocks. {self.wavefront.coords.shape[1]} "
                             f"observation points and {blocks} blocks.")
+
+        if return_field:
+            field = torch.zeros_like(self.wavefront.field)
+        else:
+            field = self.wavefront.field
 
         # Loop blocks and perform calculation
         block_size = int(self.wavefront.coords.shape[1] / blocks)
@@ -135,9 +160,11 @@ class FieldSolver(torch.nn.Module):
                               + torch.sin(self.wavefront.omega * phase[..., 0])
                               * int2[..., 0]) / self.wavefront.omega
 
-            self.wavefront.field[:, bi:bf] = (real_part + 1j * imag_part) \
-                                * torch.exp(1j * self.wavefront.omega *
-                                            phase0)
+            field[:, bi:bf] = (real_part + 1j * imag_part) * torch.exp(
+                1j * self.wavefront.omega * phase0)
+
+        if return_field:
+            return field
 
     def filon_sin(self, x_samples, f_samples, omega):
         """
