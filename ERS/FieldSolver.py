@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import torch
 
 
@@ -24,7 +25,8 @@ class FieldSolver(torch.nn.Module):
         self.track = track
         self.device = device
 
-    def set_dt(self, new_samples, n_sample_x=None, flat_power=0.5):
+    def set_dt(self, new_samples, n_sample_x=None, flat_power=0.5,
+               set_bunch=False):
         """
         Sets the track samples based on large values of objective function
         obj = |grad(1/grad(g))|. Where g(t) is the phase function. Takes sample
@@ -33,7 +35,15 @@ class FieldSolver(torch.nn.Module):
         :param n_sample_x: Approximate number of test sample points in x
         :param flat_power: Power to which the objective function is raised. This
         increases the number of samples in the noisy bit.
+        :param set_bunch: If true then bunch track is also interpolated.
         """
+
+        # Check that bunch trajectories have already been set if trying to
+        # interpolate them
+        if set_bunch and self.track.bunch_r is None:
+            raise Exception("Bunch trajectories have to be set before trying to"
+                            " interpolate them. Use set_bunch=False or run"
+                            " track.sim_bunch_c().")
 
         if n_sample_x:
             sample_rate = int(self.wavefront.n_samples_xy[0] / n_sample_x)
@@ -66,25 +76,15 @@ class FieldSolver(torch.nn.Module):
         self.track.beta = CubicInterp(cumulative_obj.repeat(3, 1),
                                     self.track.beta)(track_samples.repeat(3, 1))
 
-    def set_bunch_dt(self):
-        """
-        Updates the samples for the bunch track. Assume set_dt has already
-         been set.
-        """
+        if set_bunch:
+            n = self.track.bunch_r.shape[:2]
+            self.track.bunch_r = CubicInterp(cumulative_obj.repeat(*n, 1),
+                                self.track.bunch_r)(track_samples.repeat(*n, 1))
+            self.track.bunch_beta = CubicInterp(cumulative_obj.repeat(*n, 1),
+                             self.track.bunch_beta)(track_samples.repeat(*n, 1))
 
-        if self.track.bunch_r is None:
-            raise Exception("Bunch track must be set before updating samples, "
-                            "i.e call sim_bunch_c")
-
-        samples = self.track.bunch_r.shape[:2]
-        self.track.bunch_r = CubicInterp(
-            self.track.bunch_time.repeat(*samples, 1),
-            self.track.bunch_r)(self.track.time.repeat(*samples, 1))
-        self.track.bunch_beta = CubicInterp(
-            self.track.bunch_time.repeat(*samples, 1),
-            self.track.bunch_beta)(self.track.time.repeat(*samples, 1))
-
-    def solve(self, blocks=1, solve_ends=True, return_field=False):
+    def solve(self, blocks=1, solve_ends=True, return_new=False,
+              bunch_index=None):
         """
         Main function to solve the radiation field at the wavefront.
         Interaction limits must be within time array of track
@@ -92,8 +92,10 @@ class FieldSolver(torch.nn.Module):
          will reduce memory but slow calculation
         :param solve_ends: If true the integration is extended to +/- inf using
          an asymptotic expansion.
-        :param return_field: If true the field is returned rather than
-         updating the wavefront.
+        :param return_new: If true a new wavefront is return, else the class
+         wavefront is returned.
+        :param bunch_index: Index of bunch track. If none then central track is
+         used.
         """
 
         # Check array divides evenly into blocks
@@ -102,13 +104,22 @@ class FieldSolver(torch.nn.Module):
                             f"blocks. {self.wavefront.coords.shape[1]} "
                             f"observation points and {blocks} blocks.")
 
-        if return_field:
-            field = torch.zeros_like(self.wavefront.field)
+        # Check if we are returning new wavefront or old one
+        if return_new:
+            wavefront = self.wavefront.copy()
         else:
-            field = self.wavefront.field
+            wavefront = self.wavefront
+
+        # Check if we are sampling from bunch track or central track
+        if bunch_index is None:
+            r = self.track.r
+            beta = self.track.beta
+        else:
+            r = self.track.bunch_r[bunch_index]
+            beta = self.track.bunch_beta[bunch_index]
 
         # Loop blocks and perform calculation
-        block_size = int(self.wavefront.coords.shape[1] / blocks)
+        block_size = int(wavefront.coords.shape[1] / blocks)
         for i in range(blocks):
 
             # start and end index of block
@@ -116,8 +127,7 @@ class FieldSolver(torch.nn.Module):
             bf = block_size * (i + 1)
 
             # Calculate observation points
-            r_obs = self.wavefront.coords[:, bi:bf, None] \
-                    - self.track.r[:, None, :]
+            r_obs = wavefront.coords[:, bi:bf, None] - r[:, None, :]
             r_norm = torch.linalg.norm(r_obs, dim=0, keepdim=True)
             n_dir = r_obs[:2] / r_norm
 
@@ -130,41 +140,39 @@ class FieldSolver(torch.nn.Module):
                                dim=1)[0], dim=0)
 
             # Now calculate integrand samples
-            int1 = (self.track.beta[:2, None, :] - n_dir) \
-                   / (r_norm * phase_grad)
-            int2 = c_light * n_dir / (self.wavefront.omega * r_norm**2.0
+            int1 = (beta[:2, None, :] - n_dir) / (r_norm * phase_grad)
+            int2 = c_light * n_dir / (wavefront.omega * r_norm**2.0
                                       * phase_grad)
 
             # Solve main part of integral
-            real_part = (self.filon_cos(phase, int1, self.wavefront.omega)
-                         + self.filon_sin(phase, int2, self.wavefront.omega))
-            imag_part = (self.filon_sin(phase, int1, self.wavefront.omega)
-                         - self.filon_cos(phase, int2, self.wavefront.omega))
+            real_part = (self.filon_cos(phase, int1, wavefront.omega)
+                         + self.filon_sin(phase, int2, wavefront.omega))
+            imag_part = (self.filon_sin(phase, int1, wavefront.omega)
+                         - self.filon_cos(phase, int2, wavefront.omega))
 
             # Solve end points to inf
             if solve_ends:
-                real_part += (torch.cos(self.wavefront.omega * phase[..., 0])
+                real_part += (torch.cos(wavefront.omega * phase[..., 0])
                               * int2[..., 0]
-                              - torch.cos(self.wavefront.omega * phase[..., -1])
+                              - torch.cos(wavefront.omega * phase[..., -1])
                               * int2[..., -1]
-                              + torch.sin(self.wavefront.omega * phase[..., 0])
+                              + torch.sin(wavefront.omega * phase[..., 0])
                               * int1[..., 0]
-                              - torch.sin(self.wavefront.omega * phase[..., -1])
-                              * int1[..., -1]) / self.wavefront.omega
-                imag_part += (torch.cos(self.wavefront.omega * phase[..., -1])
+                              - torch.sin(wavefront.omega * phase[..., -1])
+                              * int1[..., -1]) / wavefront.omega
+                imag_part += (torch.cos(wavefront.omega * phase[..., -1])
                               * int1[..., -1]
-                              - torch.cos(self.wavefront.omega * phase[..., 0])
+                              - torch.cos(wavefront.omega * phase[..., 0])
                               * int1[..., 0]
-                              - torch.sin(self.wavefront.omega * phase[..., -1])
+                              - torch.sin(wavefront.omega * phase[..., -1])
                               * int2[..., -1]
-                              + torch.sin(self.wavefront.omega * phase[..., 0])
-                              * int2[..., 0]) / self.wavefront.omega
+                              + torch.sin(wavefront.omega * phase[..., 0])
+                              * int2[..., 0]) / wavefront.omega
 
-            field[:, bi:bf] = (real_part + 1j * imag_part) * torch.exp(
-                1j * self.wavefront.omega * phase0)
-
-        if return_field:
-            return field
+            wavefront.field[:, bi:bf] = (real_part + 1j * imag_part) \
+                                        * torch.exp(1j * wavefront.omega
+                                                    * phase0)
+        return wavefront
 
     def filon_sin(self, x_samples, f_samples, omega):
         """

@@ -1,5 +1,6 @@
 import torch
-from FieldSolver import FieldSolver, CubicInterp
+from .FieldSolver import FieldSolver
+import matplotlib.pyplot as plt
 
 # TODO need to add multi device looping
 
@@ -10,7 +11,7 @@ class BeamSolver:
     incoherent radiation
     """
 
-    def __init__(self, wavefront, track, optics_container, devices=None,
+    def __init__(self, wavefront, track, optics_container=None, devices=None,
                  dt_args=None):
         """
         :param wavefront: Instance of Wavefront class
@@ -32,8 +33,7 @@ class BeamSolver:
         self.devices = devices
 
         self.solver = FieldSolver(wavefront, track, device=devices)
-        self.solver.set_dt(dt_args)
-        self.solver.set_bunch_dt()
+        self.solver.set_dt(**dt_args, set_bunch=True)
 
     def solve_incoherent(self, n_part=None, blocks=1, solve_ends=True):
         """
@@ -54,9 +54,16 @@ class BeamSolver:
         if not n_part:
             n_part = self.track.bunch_r.shape[0]
 
-        for _ in range(n_part):
-            self.solver.solve(blocks, solve_ends, return_field=True)
+        intensity = torch.zeros_like(self.wavefront.x_array,
+                                     device=self.devices, dtype=torch.double)
 
+        for index in range(n_part):
+            wavefront = self.solver.solve(blocks, solve_ends, True, index)
+            if self.optics_container:
+                self.optics_container.propagate(wavefront)
+            intensity = intensity + wavefront.get_intensity()
+
+        return intensity.T / n_part
 
     def solve_coherent(self, n_part):
         pass

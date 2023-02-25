@@ -174,6 +174,10 @@ class Track(torch.nn.Module):
         :param bunch_params: np.array of 2nd order moments in the format:
          [sig_x, sig_x_xp, sig_xp, sig_x, sig_y_yp, sig_yp, sig_gamma]
         """
+
+        # First we simulate the central track
+        self.sim_single_c(field_container, time, r_0, d_0, gamma)
+
         self.bunch_time = time
         r0_c = cTrack.ThreeVector(r_0[0], r_0[1], r_0[2])
         d0_c = cTrack.ThreeVector(d_0[0], d_0[1], d_0[2])
@@ -192,7 +196,3 @@ class Track(torch.nn.Module):
         self.bunch_r = torch.tensor(r.transpose((0, 2, 1))).to(self.device)
         self.bunch_beta = torch.tensor(beta.transpose((0, 2, 1))).to(
             self.device)
-
-        print(self.bunch_time.shape)
-        print(self.bunch_r.shape)
-        print(self.bunch_beta.shape)

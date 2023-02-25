@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-class Wavefront(torch.nn.Module):
+class Wavefront:
     """
     Wavefront class containing complex field array.
     """
@@ -18,7 +18,6 @@ class Wavefront(torch.nn.Module):
             3 -> (x, y, z))
         :param device: Device being used (e.g. cpu / gpu)
         """
-        super().__init__()
         self.z = z
         self.omega = omega
         self.wf_bounds = wf_bounds
@@ -96,8 +95,8 @@ class Wavefront(torch.nn.Module):
 
     def change_dims(self, new_dims):
         """
-        Changes dimensions of the wavefront. If decreasing dims then z / y
-            axis is removed in that order
+        Changes dimensions of the wavefront. If decreasing dims then z / y-axis
+         is removed in that order
         :param new_dims: New dimensions of the wavefront
         """
 
@@ -120,7 +119,20 @@ class Wavefront(torch.nn.Module):
         self.dims = new_dims
 
     def copy(self):
-        
+        """
+        Copies the wavefront structure to a new instance with zero field
+        :return: A copy of the wavefront.
+        """
+        return Wavefront(self.z, self.omega, self.wf_bounds, self.n_samples_xy,
+                         self.dims, self.device)
+
+    def get_intensity(self):
+        """
+        Calculates and returns the intensity of the wavefront.
+        :return: Intensity array
+        """
+        return torch.sum(torch.abs(self.field)**2.0, dim=0)\
+            .reshape(self.n_samples_xy[0], self.n_samples_xy[1])
 
     def plot_intensity(self, log_plot=False, axes_lim=None, ds_fact=1,
                        lineout=None):
