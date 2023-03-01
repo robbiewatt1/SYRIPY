@@ -26,7 +26,7 @@ class Track(torch.nn.Module):
         self.p = None     # Particle momentum
         self.beta = None  # Velocity along particle path
 
-        self.bunch_time = None # Bunch time samples
+        self.bunch_time = None  # Bunch time samples
         self.bunch_r = None  # bunch position
         self.bunch_beta = None  # Bunch beta
 
@@ -59,6 +59,22 @@ class Track(torch.nn.Module):
             ax.plot(self.beta[axes[0], :].cpu().detach().numpy(),
                     self.beta[axes[1], :].cpu().detach().numpy())
         return fig, ax
+
+    def switch_device(self, device):
+        """
+        Changes the device that the class data is stored on.
+        :param device: Device to switch to.
+        """
+        self.device = device
+        if self.r is not None:
+            self.time = self.time.to(device)
+            self.r = self.r.to(device)
+            self.beta = self.beta.to(device)
+        if self.bunch_r is not None:
+            self.bunch_time = self.bunch_time.to(device)
+            self.bunch_r = self.bunch_r.to(device)
+            self.bunch_beta = self.bunch_beta.to(device)
+        return self
 
     def sim_single(self, field_container, time, r_0, d_0, gamma):
         """

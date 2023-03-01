@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-class Wavefront:
+class Wavefront(torch.nn.Module):
     """
     Wavefront class containing complex field array.
     """
@@ -18,6 +18,7 @@ class Wavefront:
             3 -> (x, y, z))
         :param device: Device being used (e.g. cpu / gpu)
         """
+        super().__init__()
         self.z = z
         self.omega = omega
         self.wf_bounds = wf_bounds
@@ -118,13 +119,18 @@ class Wavefront:
         self.field = new_field
         self.dims = new_dims
 
-    def copy(self):
+    def switch_device(self, device):
         """
-        Copies the wavefront structure to a new instance with zero field
-        :return: A copy of the wavefront.
+        Changes the device that the class data is stored on.
+        :param device: Device to switch to.
         """
-        return Wavefront(self.z, self.omega, self.wf_bounds, self.n_samples_xy,
-                         self.dims, self.device)
+        self.device = device
+        self.x_axis = self.x_axis.to(device)
+        self.y_axis = self.y_axis.to(device)
+        self.x_array = self.x_array.to(device)
+        self.coords = self.coords.to(device)
+        self.field = self.field.to(device)
+        return self
 
     def get_intensity(self):
         """

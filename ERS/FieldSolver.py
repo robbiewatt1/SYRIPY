@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import torch
+import copy
 
 
 # TODO Change things so that the field is saved as a 2d array rather than 1
@@ -14,7 +15,7 @@ class FieldSolver(torch.nn.Module):
     particle trajectory.
     """
 
-    def __init__(self, wavefront, track, device=None):
+    def __init__(self, wavefront, track):
         """
         :param wavefront: Instance of Wavefront class
         :param track: Instance of Track class
@@ -23,7 +24,21 @@ class FieldSolver(torch.nn.Module):
         super().__init__()
         self.wavefront = wavefront
         self.track = track
+
+        # Check that wavefront / track device are both the same
+        if track.device != wavefront.device:
+            raise Exception("Track and wavefront are on different devices!")
+        self.device = wavefront.device
+
+    def switch_device(self, device):
+        """
+        Changes the device that the class data is stored on.
+        :param device: Device to switch to.
+        """
         self.device = device
+        self.track.switch_device(device)
+        self.wavefront.switch_device(device)
+        return self
 
     def set_dt(self, new_samples, n_sample_x=None, flat_power=0.5,
                set_bunch=False):
@@ -106,7 +121,7 @@ class FieldSolver(torch.nn.Module):
 
         # Check if we are returning new wavefront or old one
         if return_new:
-            wavefront = self.wavefront.copy()
+            wavefront = copy.deepcopy(self.wavefront)
         else:
             wavefront = self.wavefront
 
@@ -173,6 +188,13 @@ class FieldSolver(torch.nn.Module):
                                         * torch.exp(1j * wavefront.omega
                                                     * phase0)
         return wavefront
+
+    def forward(self, blocks=1, solve_ends=True, return_new=False,
+                bunch_index=None):
+        """
+        Just an alias for solve. Might remove and replace in the future
+        """
+        return self.solve(blocks, solve_ends, return_new, bunch_index)
 
     def filon_sin(self, x_samples, f_samples, omega):
         """
