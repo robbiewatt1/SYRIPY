@@ -40,16 +40,20 @@ class FieldSolver(torch.nn.Module):
         self.wavefront.switch_device(device)
         return self
 
-    def set_dt(self, new_samples, n_sample_x=None, flat_power=0.5,
-               set_bunch=False):
+    def set_dt(self, new_samples, t_start=None, t_end=None, n_sample_x=None,
+               flat_power=0.5, set_bunch=False):
         """
         Sets the track samples based on large values of objective function
         obj = |grad(1/grad(g))|. Where g(t) is the phase function. Takes sample
         along x dimension at y=0.
-        :param new_samples: Number of new samples along trajectory
-        :param n_sample_x: Approximate number of test sample points in x
+        :param new_samples: Number of new samples along trajectory.
+        :param t_start: Start time for integration. If t_start=None start
+         time of original track will be used.
+        :param t_end: End time for integration. If t_end=None end time of
+         original track will be used.
+        :param n_sample_x: Approximate number of test sample points in x.
         :param flat_power: Power to which the objective function is raised. This
-        increases the number of samples in the noisy bit.
+         increases the number of samples in the noisy bit.
         :param set_bunch: If true then bunch track is also interpolated.
         """
 
@@ -65,17 +69,26 @@ class FieldSolver(torch.nn.Module):
         else:
             sample_rate = 1
 
+        # Set time start / end and find the closest indexes
+        if t_start is None:
+            t_start = self.track.time[0]
+        if t_end is None:
+            t_end = self.track.time[-1]
+
+        t_0 = torch.argmin(torch.abs(self.track.time - t_start)).item()
+        t_1 = torch.argmin(torch.abs(self.track.time - t_end)).item()+1
+
         # Calculate grad(1/ grad(phi)) at sample_x points.
         start_index = self.wavefront.n_samples_xy[1] // 2
         r_obs = self.wavefront.coords[
                 :, start_index::self.wavefront.n_samples_xy[1]*sample_rate,
-                None] - self.track.r[:, None, :]
+                None] - self.track.r[:, None, t_0:t_1]
         r_norm = torch.linalg.norm(r_obs, dim=0)
-        phase_samples = self.track.time[None, :] + r_norm / c_light
-        phase_grad = torch.gradient(phase_samples,
-                                    spacing=(self.track.time,), dim=1)[0]
-        grad_inv_grad = torch.gradient(1. / phase_grad,
-                                    spacing=(self.track.time,), dim=1)[0]
+        phase_samples = self.track.time[None, t_0:t_1] + r_norm / c_light
+        phase_grad = torch.gradient(phase_samples, spacing=(
+            self.track.time[t_0:t_1],), dim=1)[0]
+        grad_inv_grad = torch.gradient(1. / phase_grad, spacing=(
+            self.track.time[t_0:t_1],), dim=1)[0]
 
         # New samples are then evenly spaced over the cumulative distribution
         objective, _ = torch.max(torch.abs(grad_inv_grad), dim=0)
@@ -85,18 +98,18 @@ class FieldSolver(torch.nn.Module):
         # Now update all the samples
         track_samples = torch.linspace(0, 1, new_samples, device=self.device)
         self.track.time = CubicInterp(cumulative_obj,
-                                      self.track.time)(track_samples)
+                                      self.track.time[t_0:t_1])(track_samples)
         self.track.r = CubicInterp(cumulative_obj.repeat(3, 1),
-                                   self.track.r)(track_samples.repeat(3, 1))
+                           self.track.r[:, t_0:t_1])(track_samples.repeat(3, 1))
         self.track.beta = CubicInterp(cumulative_obj.repeat(3, 1),
-                                    self.track.beta)(track_samples.repeat(3, 1))
+                        self.track.beta[:, t_0:t_1])(track_samples.repeat(3, 1))
 
         if set_bunch:
             n = self.track.bunch_r.shape[:2]
             self.track.bunch_r = CubicInterp(cumulative_obj.repeat(*n, 1),
-                                self.track.bunch_r)(track_samples.repeat(*n, 1))
+                  self.track.bunch_r[..., t_0:t_1])(track_samples.repeat(*n, 1))
             self.track.bunch_beta = CubicInterp(cumulative_obj.repeat(*n, 1),
-                             self.track.bunch_beta)(track_samples.repeat(*n, 1))
+               self.track.bunch_beta[..., t_0:t_1])(track_samples.repeat(*n, 1))
 
     def solve(self, blocks=1, solve_ends=True, return_new=False,
               bunch_index=None):

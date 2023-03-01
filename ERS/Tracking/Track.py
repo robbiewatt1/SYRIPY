@@ -60,6 +60,26 @@ class Track(torch.nn.Module):
                     self.beta[axes[1], :].cpu().detach().numpy())
         return fig, ax
 
+    def plot_bunch(self, axes, n_part=-1, pos=True):
+        """
+        Plot single particle track
+        :param axes: Axes to plot (e. g z-x [2, 0])
+        :param n_part: Number of tracks to plot. Defults to all
+        :param pos: Bool if true then plot position else plot beta
+        :return: fig, ax
+        """
+        if self.bunch_r is None:
+            raise Exception("No bunch has been simulated so nothing can be "
+                            "plotted.")
+        fig, ax = plt.subplots()
+        if pos:
+            ax.plot(self.bunch_r[:n_part, axes[0], :].cpu().T,
+                    self.bunch_r[:n_part, axes[1], :].cpu().T)
+        else:
+            ax.plot(self.bunch_beta[:n_part, axes[0], :].cpu().T,
+                    self.bunch_beta[:n_part, axes[1], :].cpu().T)
+        return fig, ax
+
     def switch_device(self, device):
         """
         Changes the device that the class data is stored on.
@@ -204,8 +224,6 @@ class Track(torch.nn.Module):
         track.setBeamParams(bunch_params)
         track.setField(field)
         time, r, beta = track.simulateBeam(n_part)
-
-        # TODO Check that shape is right
 
         # Transpose for field solver and switch device
         self.bunch_time = torch.tensor(self.bunch_time).to(self.device)

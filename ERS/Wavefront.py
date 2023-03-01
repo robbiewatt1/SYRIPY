@@ -173,16 +173,18 @@ class Wavefront(torch.nn.Module):
                 ax.plot(intensity[:, lineout[1]])
         else:  # 2D plot
             if log_plot:
-                pcol = ax.pcolormesh(self.x_axis.cpu().detach().numpy()[::ds_fact],
-                                     self.y_axis.cpu().detach().numpy()[::ds_fact],
-                                     np.log10(intensity[::ds_fact, ::ds_fact]),
-                                     cmap="jet", shading='auto')
+                pcol = ax.pcolormesh(
+                    self.x_axis.cpu().detach().numpy()[::ds_fact],
+                    self.y_axis.cpu().detach().numpy()[::ds_fact],
+                    np.log10(intensity[::ds_fact, ::ds_fact]),
+                    cmap="jet", shading='auto')
                 fig.colorbar(pcol)
             else:
-                pcol = ax.pcolormesh(self.x_axis.cpu().detach().numpy()[::ds_fact],
-                                     self.y_axis.cpu().detach().numpy()[::ds_fact],
-                                     intensity[::ds_fact, ::ds_fact],
-                                     cmap="jet", shading='auto')
+                pcol = ax.pcolormesh(
+                    self.x_axis.cpu().detach().numpy()[::ds_fact],
+                    self.y_axis.cpu().detach().numpy()[::ds_fact],
+                    intensity[::ds_fact, ::ds_fact],
+                    cmap="jet", shading='auto')
                 fig.colorbar(pcol)
 
         if axes_lim:
