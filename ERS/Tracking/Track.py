@@ -2,10 +2,12 @@ import numpy as np
 import torch
 import torch.linalg
 import matplotlib.pyplot as plt
-import os
 from .cTrack import cTrack
+from .Magnets import FieldContainer
+from typing import Optional, TypeVar, List
 
 c_light = 0.29979245
+#TTrack = TypeVar("TTrack", bound="Track")
 
 
 class Track(torch.nn.Module):
@@ -14,7 +16,7 @@ class Track(torch.nn.Module):
     can either be solved using an RK4 method or loaded from an external file.
     """
 
-    def __init__(self, device=None):
+    def __init__(self, device: Optional[torch.device] = None) -> None:
         """
         :param device: Device being used (cpu / gpu)
         """
@@ -30,7 +32,7 @@ class Track(torch.nn.Module):
         self.bunch_r = None  # bunch position
         self.bunch_beta = None  # Bunch beta
 
-    def load_file(self, track_file):
+    def load_file(self, track_file: str) -> None:
         """
         Loads track from external simulation
         :param track_file: Numpy array containing track information. In format:
@@ -44,7 +46,8 @@ class Track(torch.nn.Module):
         self.r = torch.tensor(r, device=self.device)
         self.beta = torch.tensor(beta, device=self.device)
 
-    def plot_track(self, axes, pos=True):
+    def plot_track(self, axes: List[int], pos: bool = True
+                   ) -> tuple[plt.Figure, plt.Axes]:
         """
         Plot interpolated track (Uses cubic spline)
         :param axes: Axes to plot (e. g z-x [2, 0])
@@ -60,11 +63,12 @@ class Track(torch.nn.Module):
                     self.beta[axes[1], :].cpu().detach().numpy())
         return fig, ax
 
-    def plot_bunch(self, axes, n_part=-1, pos=True):
+    def plot_bunch(self, axes: List[int], n_part: int = -1, pos: bool = True
+                   ) -> tuple[plt.Figure, plt.Axes]:
         """
         Plot single particle track
         :param axes: Axes to plot (e. g z-x [2, 0])
-        :param n_part: Number of tracks to plot. Defults to all
+        :param n_part: Number of tracks to plot. Defaults to all
         :param pos: Bool if true then plot position else plot beta
         :return: fig, ax
         """
@@ -80,7 +84,7 @@ class Track(torch.nn.Module):
                     self.bunch_beta[:n_part, axes[1], :].cpu().T)
         return fig, ax
 
-    def switch_device(self, device):
+    def switch_device(self, device: torch.device) -> "Track":
         """
         Changes the device that the class data is stored on.
         :param device: Device to switch to.
@@ -96,13 +100,14 @@ class Track(torch.nn.Module):
             self.bunch_beta = self.bunch_beta.to(device)
         return self
 
-    def sim_single(self, field_container, time, r_0, d_0, gamma):
+    def sim_single(self, field_container: FieldContainer, time: torch.Tensor,
+                   r_0: torch.Tensor, d_0: torch.Tensor, gamma: float) -> None:
         """
         Models the trajectory of a single particle through a field defined
         by field_container
         :param field_container: Instance of class FieldContainer.
-        :param time: Array of times
-        :param r_0:
+        :param time: Array of time samples.
+        :param r_0: Initial position of particle
         :param d_0: Initial direction of particle
         :param gamma: Initial lorentz factor of particle
         """
@@ -150,7 +155,7 @@ class Track(torch.nn.Module):
         self.time = self.time.to(self.device)
 
     @staticmethod
-    def _dp_dt(p, field):
+    def _dp_dt(p: torch.Tensor, field: torch.Tensor) -> torch.Tensor:
         """
         Rate of change of beta w.r.t time. We assume acceleration is always
         perpendicular to velocity which is true for just magnetic field
@@ -162,7 +167,7 @@ class Track(torch.nn.Module):
         return -1 * torch.cross(p, field) / gamma
 
     @staticmethod
-    def _dr_dt(p):
+    def _dr_dt(p: torch.Tensor) -> torch.Tensor:
         """
         Rate of change of position w.r.t time
         :param p: Particle momentum
@@ -171,10 +176,12 @@ class Track(torch.nn.Module):
         gamma = (1.0 + torch.sum(p * p) / c_light**2.0)**0.5
         return p / gamma
 
-    def sim_single_c(self, field_container, time, r_0, d_0, gamma):
+    def sim_single_c(self, field_container: FieldContainer, time: torch.Tensor,
+                     r_0: torch.Tensor, d_0: torch.Tensor, gamma: float
+                     ) -> None:
         """
         Models the trajectory of a single particle through a field defined
-        by field_container is cpp version (should be much much fatser)
+        by field_container is cpp version (should be much-much faster)
         :param field_container: Instance of class FieldContainer.
         :param time: Array of times
         :param r_0: Initial position of particle
@@ -196,18 +203,19 @@ class Track(torch.nn.Module):
         self.r = torch.tensor(r).to(self.device).T
         self.beta = torch.tensor(beta).to(self.device).T
 
-    def sim_bunch_c(self, n_part, field_container, time, r_0, d_0, gamma,
-                    bunch_params):
+    def sim_bunch_c(self, n_part: int, field_container: FieldContainer,
+                    time: torch.Tensor, r_0: torch.Tensor, d_0: torch.Tensor,
+                    gamma: float, bunch_params: torch.Tensor) -> None:
         """
         Models the trajectory of a single particle through a field defined
-        by field_container is cpp version (should be much much faster)
-        :param n_part: Number of particles to simulate
+        by field_container is cpp version (should be much-much faster)
+        :param n_part: Number of particles to simulate.
         :param field_container: Instance of class FieldContainer.
-        :param time: Array of times
-        :param r_0:
-        :param d_0: Initial direction of particle
-        :param gamma: Initial lorentz factor of particle
-        :param bunch_params: np.array of 2nd order moments in the format:
+        :param time: Array of time samples.
+        :param r_0: Initial position of central track.
+        :param d_0: Initial direction of central track.
+        :param gamma: Initial lorentz factor of particle.
+        :param bunch_params: torch.Tensor of 2nd order moments in the format:
          [sig_x, sig_x_xp, sig_xp, sig_x, sig_y_yp, sig_yp, sig_gamma]
         """
 

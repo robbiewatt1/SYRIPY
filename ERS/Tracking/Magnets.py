@@ -1,6 +1,6 @@
 import torch
 from .cTrack import cTrack
-
+from typing import Optional, List
 
 me = 9.1093837e-31
 qe = 1.60217663e-19
@@ -11,13 +11,15 @@ class FieldBlock:
     Base class of magnetic fields.
     """
     # TODO need to add the direction of the magnet
-    def __init__(self, center_pos, length, B0, direction=None, edge_length=0.):
+    def __init__(self, center_pos: torch.Tensor, length: float,
+                 B0: torch.Tensor, direction: Optional[torch.Tensor] = None,
+                 edge_length: float = 0.) -> None:
         """
         :param center_pos: Central position of the magnet.
         :param length: Length of main part of field.
         :param B0: Field parameter vector [Units are tesla and meters.]
         :param direction: Vector through central axis of magnet [0, 0, 1]
-            by defult
+            by default
         :param edge_length: Length for field to fall by 10 %. 0 for hard edge or
             > 0 for soft edge with B0 / (1 + (z / d)**2)**2 dependence.
         """
@@ -29,7 +31,7 @@ class FieldBlock:
         self.edge_scaled = edge_length / (10.**0.5 - 1)**0.5
         self.order = 0
 
-    def get_field(self, position):
+    def get_field(self, position: torch.Tensor) -> torch.Tensor:
         """
         Gets the field at a given location.
         :param position: Position of particle
@@ -37,7 +39,7 @@ class FieldBlock:
         """
         pass
 
-    def _fridge(self, b, z):
+    def _fridge(self, b: torch.Tensor, z: float) -> torch.Tensor:
         """
         Calculates the fringe field at a given location.
         :param b: Field vector at edge.
@@ -53,21 +55,23 @@ class Dipole(FieldBlock):
     and decays as
     """
 
-    def __init__(self, center_pos, length, B0, direction=None, edge_length=0.):
+    def __init__(self, center_pos: torch.Tensor, length: float,
+                 B0: torch.Tensor, direction: Optional[torch.Tensor] = None,
+                 edge_length: float = 0.) -> None:
         """
         :param center_pos: Central position of the magnet.
         :param length: Length of main part of field.
         :param B0: Field strength in y direction [0, B0, 0]
         :param direction: Vector through central axis of magnet [0, 0, 1]
-            by defult
+         by default
         :param edge_length: Length for field to fall by 10 %. 0 for hard edge or
-            > 0 for soft edge with B0 / (1 + (z / d)**2)**2 dependence.
+         > 0 for soft edge with B0 / (1 + (z / d)**2)**2 dependence.
         """
         super().__init__(center_pos, length, torch.tensor([0, B0, 0]),
                          direction, edge_length)
         self.order = 1
 
-    def get_field(self, position):
+    def get_field(self, position: torch.Tensor) -> torch.Tensor:
         """
         Gets the field at a given location.
         :param position: Position of particle
@@ -87,8 +91,9 @@ class Quadrupole(FieldBlock):
     gradient means focusing in x and negative is focusing in y.
     """
 
-    def __init__(self, center_pos, length, gradB, direction=None,
-                 edge_length=0.):
+    def __init__(self, center_pos: torch.Tensor, length: float,
+                 gradB: torch.Tensor, direction: Optional[torch.Tensor] = None,
+                 edge_length: float = 0.) -> None:
         """
         :param center_pos: Central position of the magnet.
         :param length: Length of main part of field.
@@ -101,7 +106,7 @@ class Quadrupole(FieldBlock):
         super().__init__(center_pos, length, torch.tensor([gradB, -gradB, 0]),
                          direction, edge_length)
 
-    def get_field(self, position):
+    def get_field(self, position: torch.Tensor) -> torch.Tensor:
         """
         Gets the field at a given location.
         :param position: Position of particle
@@ -121,13 +126,13 @@ class FieldContainer:
     field for any given location.
     """
 
-    def __init__(self, field_array):
+    def __init__(self, field_array: List[FieldBlock]) -> None:
         """
         :param field_array: A list containing all the defined elements.
         """
         self.field_array = field_array
 
-    def get_field(self, position):
+    def get_field(self, position: torch.Tensor) -> torch.Tensor:
         """
         Finds which element we are in and returns field
         :param position: Position of particle
@@ -138,7 +143,7 @@ class FieldContainer:
             field += element.get_field(position)
         return field
 
-    def gen_c_container(self):
+    def gen_c_container(self) -> cTrack.FieldContainer:
         """
         Converts the python field container class to the c-type
         :return: Instance of cTrack.FieldContainer with elements filled.

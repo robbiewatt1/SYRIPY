@@ -1,20 +1,25 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+from typing import Optional, TypeVar, List
+
+TWavefront = TypeVar("TWavefront", bound="Wavefront")
 
 
 class Wavefront(torch.nn.Module):
     """
     Wavefront class containing complex field array.
     """
-    def __init__(self, z, omega, wf_bounds, n_samples_xy, dims=2,
-                 device=None):
+
+    def __init__(self, z: float, omega: float, wf_bounds: List[float],
+                 n_samples_xy: List[int], dims: int = 2,
+                 device: Optional[torch.device] = None) -> None:
         """
         :param z: Longitudinal position of wavefront
         :param omega: Frequency of radiation
-        :param wf_bounds: Bounds of wavefront [xmin, xmax, ymin, ymax]
+        :param wf_bounds: Bounds of wavefront [x_min, x_max, y_min, y_max]
         :param n_samples_xy: Samples in wavefront [n_x, n_y]
-        :param dims: Polarisation dimensions of field.  (dims = 2 -> (x, y)
+        :param dims: Polarisation dimensions of field. (dims = 2 -> (x, y)
             3 -> (x, y, z))
         :param device: Device being used (e.g. cpu / gpu)
         """
@@ -42,7 +47,7 @@ class Wavefront(torch.nn.Module):
         self.field = torch.zeros((dims, self.n_samples), dtype=torch.cfloat,
                                  device=device)
 
-    def pad_wavefront(self, pad_fact=2):
+    def pad_wavefront(self, pad_fact: int = 2) -> None:
         """
         Pads the field with zeros to prevent artifacts from fourier
         transform.
@@ -73,7 +78,8 @@ class Wavefront(torch.nn.Module):
             = self.field.reshape(self.dims, x_size_old, y_size_old)
         self.field = new_field.flatten(1, 2)
 
-    def update_bounds(self, bounds, n_samples_xy):
+    def update_bounds(self, bounds: List[float], n_samples_xy: List[int]
+                      ) -> None:
         """
         Updates the bounds of the wavefront and changes the grid coords.
         :param bounds: New bounds of wavefront [xmin, xmax, ymin, ymax]
@@ -94,13 +100,12 @@ class Wavefront(torch.nn.Module):
                                    self.z * torch.ones_like(self.x_array)),
                                   dim=0).flatten(1, 2)
 
-    def change_dims(self, new_dims):
+    def change_dims(self, new_dims: int) -> None:
         """
         Changes dimensions of the wavefront. If decreasing dims then z / y-axis
          is removed in that order
         :param new_dims: New dimensions of the wavefront
         """
-
         new_field = torch.zeros((new_dims, self.n_samples),
                                 dtype=torch.cfloat,
                                 device=self.device).flatten(1, 2)
@@ -119,7 +124,7 @@ class Wavefront(torch.nn.Module):
         self.field = new_field
         self.dims = new_dims
 
-    def switch_device(self, device):
+    def switch_device(self, device: torch.device) -> "Wavefront":
         """
         Changes the device that the class data is stored on.
         :param device: Device to switch to.
@@ -132,23 +137,26 @@ class Wavefront(torch.nn.Module):
         self.field = self.field.to(device)
         return self
 
-    def get_intensity(self):
+    @torch.jit.export
+    def get_intensity(self) -> torch.Tensor:
         """
         Calculates and returns the intensity of the wavefront.
         :return: Intensity array
         """
-        return torch.sum(torch.abs(self.field)**2.0, dim=0)\
-            .reshape(self.n_samples_xy[0], self.n_samples_xy[1])
+        return torch.sum(torch.abs(self.field)**2.0, dim=0).reshape(
+            self.n_samples_xy[0], self.n_samples_xy[1])
 
-    def plot_intensity(self, log_plot=False, axes_lim=None, ds_fact=1,
-                       lineout=None):
+    def plot_intensity(self, log_plot: Optional[bool] = False,
+                       ds_fact: int = 1, axes_lim: Optional[List[float]] = None,
+                       lineout: Optional[List[int]] = None
+                       ) -> tuple[plt.Figure, plt.Axes]:
         """
         Plots the intensity of the wavefront.
         :param log_plot: Make intensity axis logged
-        :param axes_lim: Sets the x/y axes limits [[xmin, xmax], [ymin, ymax]]
         :param ds_fact: Down sample image to make plotting easier
+        :param axes_lim: Sets the x/y axes limits [[xmin, xmax], [ymin, ymax]]
         :param lineout: Axis and index of lineout e.g [0, 50] will plot a
-         lineout along y at x_i = 50. Defult is None which plots 2d image
+         lineout along y at x_i = 50. Default is None which plots 2d image
         :return: (fig, ax)
         """
         if self.dims == 1:
@@ -192,13 +200,17 @@ class Wavefront(torch.nn.Module):
             ax.set_ylim(axes_lim[2], axes_lim[3])
         return fig, ax
 
-    def plot_phase(self, dim=0, axes_lim=None, ds_fact=1, lineout=None):
+    def plot_phase(self, dim: int = 0, ds_fact: int = 1,
+                   axes_lim: Optional[List[float]] = None,
+                   lineout: Optional[List[int]] = None
+                   ) -> tuple[plt.Figure, plt.Axes]:
         """
         Plots the intensity of the wavefront.
-        :param axes_lim: Sets the x/y axes limits [[xmin, xmax], [ymin, ymax]]
+        :param dim: Dimension to plot.
         :param ds_fact: Down sample image to make plotting easier
+        :param axes_lim: Sets the x/y axes limits [x_min, x_max, y_min, y_max]
         :param lineout: Axis and index of lineout e.g [0, 50] will plot a
-         lineout along y at x_i = 50. Defult is None which plots 2d image
+         lineout along y at x_i = 50. Default is None which plots 2d image
         :return: (fig, ax)
         """
         phase = torch.angle(self.field[dim]).reshape(self.n_samples_xy[0],
@@ -229,3 +241,17 @@ class Wavefront(torch.nn.Module):
             ax.set_ylim(axes_lim[2], axes_lim[3])
         return fig, ax
 
+    """
+    def copy(self, memo) -> TWavefront:
+
+        Overloads the deep copy
+        :param memo:
+        :return:
+
+        deepcopy_method = self.__deepcopy__
+        self.__deepcopy__ = None
+        wf_copy = deepcopy(self, memo)
+        self.__deepcopy__ = deepcopy_method
+        wf_copy.__deepcopy__ = deepcopy_method
+        return wf_copy
+    """

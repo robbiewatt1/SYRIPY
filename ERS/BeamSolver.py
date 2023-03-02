@@ -1,6 +1,9 @@
 import torch
 from .FieldSolver import FieldSolver
-import matplotlib.pyplot as plt
+from .Wavefront import Wavefront
+from .Tracking import Track
+from .Optics import OpticsContainer
+from typing import Optional, Dict
 import copy
 
 # TODO need to add multi device looping
@@ -12,7 +15,10 @@ class BeamSolver:
     incoherent radiation
     """
 
-    def __init__(self, wavefront, track, optics_container=None, dt_args=None):
+    def __init__(self, wavefront: Wavefront, track: Track,
+                 optics_container: Optional[OpticsContainer] = None,
+                 dt_args: Optional[Dict[str, int]] = None,
+                 compile: bool = False) -> None:
         """
         :param wavefront: Instance of Wavefront class
         :param track: Instance of Track class (should already have calculated
@@ -20,6 +26,8 @@ class BeamSolver:
         :param optics_container: Instance of OpticsContainer class.
         :param dt_args: Dictionary of argument for automatic setting of time
          samples. If none then
+        :param compile: If true, the solver class will be compiled with
+         torch.jit.scipt. This can speed the calculation up by ~ 2x.
         """
 
         if track.r is None or track.bunch_r is None:
@@ -33,8 +41,12 @@ class BeamSolver:
         self.solver = FieldSolver(wavefront, track)
         self.solver.set_dt(**dt_args, set_bunch=True)
 
-    def solve_incoherent(self, n_part=None, blocks=1, solve_ends=True,
-                         n_device=1):
+        if compile:
+            self.solver = torch.jit.script(self.solver)
+
+    def solve_incoherent(self, n_part: Optional[int] = None, blocks: int = 1,
+                         solve_ends: bool = True, n_device: int = 1
+                         ) -> torch.Tensor:
         """
         Calculates the intensity of incoherent radiation from multiple electrons
         :param n_part: Number of particles to simulate. Defaults to the
@@ -57,17 +69,19 @@ class BeamSolver:
             n_part = self.track.bunch_r.shape[0]
 
         if n_device == 1:
-            # Single device case and things are easy
+            # Single device case, things are easy
             intensity = torch.zeros_like(self.wavefront.x_array,
                                          device=self.solver.device,
                                          dtype=torch.double)
             for index in range(n_part):
-                wavefront = self.solver.solve(blocks, solve_ends, True, index)
+                self.solver.forward(blocks, solve_ends, True, index)
                 if self.optics_container:
-                    self.optics_container.propagate(wavefront)
-                intensity = intensity + wavefront.get_intensity()
+                    self.optics_container.propagate(self.solver.wavefront)
+                intensity = intensity + self.solver.wavefront.get_intensity()
+
         else:  # multi device case is a bit harder
             # TODO Probably doing too much talking at the moment. Should probs
+            # TODO This still needs to be fixed
             # just pass everything back at the end.
 
             # Define intensity on the mian device
@@ -79,9 +93,9 @@ class BeamSolver:
             n_part = n_device * int(n_part / n_device)
 
             # Setup all the list of solvers and send them to devices
-            solvers = [self.solver]
+            solvers = [self.solver.forward]
             solvers.extend([copy.deepcopy(self.solver).switch_device(
-                 f"cuda:{i}") for i in range(1, n_device)])
+                torch.device(f"cuda:{i}")).forward for i in range(1, n_device)])
             solver_args = [blocks, solve_ends, True]
 
             # Loop through particles
