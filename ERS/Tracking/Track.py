@@ -7,7 +7,6 @@ from .Magnets import FieldContainer
 from typing import Optional, TypeVar, List
 
 c_light = 0.29979245
-#TTrack = TypeVar("TTrack", bound="Track")
 
 
 class Track(torch.nn.Module):
@@ -188,7 +187,6 @@ class Track(torch.nn.Module):
         :param d_0: Initial direction of particle
         :param gamma: Initial lorentz factor of particle
         """
-        self.time = time
         r0_c = cTrack.ThreeVector(r_0[0], r_0[1], r_0[2])
         d0_c = cTrack.ThreeVector(d_0[0], d_0[1], d_0[2])
         field = field_container.gen_c_container()
@@ -222,7 +220,6 @@ class Track(torch.nn.Module):
         # First we simulate the central track
         self.sim_single_c(field_container, time, r_0, d_0, gamma)
 
-        self.bunch_time = time
         r0_c = cTrack.ThreeVector(r_0[0], r_0[1], r_0[2])
         d0_c = cTrack.ThreeVector(d_0[0], d_0[1], d_0[2])
         field = field_container.gen_c_container()
@@ -234,7 +231,7 @@ class Track(torch.nn.Module):
         time, r, beta = track.simulateBeam(n_part)
 
         # Transpose for field solver and switch device
-        self.bunch_time = torch.tensor(self.bunch_time).to(self.device)
+        self.bunch_time = torch.tensor(time).to(self.device)
         self.bunch_r = torch.tensor(r.transpose((0, 2, 1))).to(self.device)
         self.bunch_beta = torch.tensor(beta.transpose((0, 2, 1))).to(
             self.device)

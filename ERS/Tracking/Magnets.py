@@ -23,7 +23,7 @@ class FieldBlock:
         :param edge_length: Length for field to fall by 10 %. 0 for hard edge or
             > 0 for soft edge with B0 / (1 + (z / d)**2)**2 dependence.
         """
-        self.center_pos = torch.tensor(center_pos)
+        self.center_pos = center_pos
         self.length = length
         self.B0 = B0 / (me / (qe * 1.e-9))
         self.direction = direction
@@ -61,14 +61,13 @@ class Dipole(FieldBlock):
         """
         :param center_pos: Central position of the magnet.
         :param length: Length of main part of field.
-        :param B0: Field strength in y direction [0, B0, 0]
+        :param B0: Field strength of dipole.
         :param direction: Vector through central axis of magnet [0, 0, 1]
          by default
         :param edge_length: Length for field to fall by 10 %. 0 for hard edge or
          > 0 for soft edge with B0 / (1 + (z / d)**2)**2 dependence.
         """
-        super().__init__(center_pos, length, torch.tensor([0, B0, 0]),
-                         direction, edge_length)
+        super().__init__(center_pos, length, B0, direction, edge_length)
         self.order = 1
 
     def get_field(self, position: torch.Tensor) -> torch.Tensor:

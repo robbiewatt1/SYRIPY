@@ -1,35 +1,49 @@
 import torch
 import torch.fft as fft
 import numpy as np
+import math
 from ..Wavefront import Wavefront
+from .OpticalElement import OpticalElement
+from typing import List, Optional
 
-c_light = 0.29979245
 
+class FreeSpace(OpticalElement):
 
-class FreeSpace:
-
-    def __int__(self, z, pad, new_shape, new_bounds):
+    def __init__(self, z: float, pad: int, new_shape: List[int],
+                 new_bounds: List[float]) -> None:
         """
         :param z: Propagation distance.
         :param pad: Int setting padding amount. Default is none
         :param new_shape: Gives the shape of the output wavefront if using
          CZT transform [nx, ny]
         :param new_bounds: Gives the bounds of the output wavefront if using
-        CTZ transform [xmin, xmax, ymin, ymax].
+         CTZ transform [x_min, x_max, y_min, y_max].
         """
+        super().__init__()
         self.z = z
         self.pad = pad
         self.new_shape = new_shape
         self.new_bounds = new_bounds
+        self.c_light = 0.29979245
 
-    def propagate(self, wavefront):
+        if self.new_shape and self.new_bounds:
+            self.use_czt = True
+        elif bool(self.new_shape) ^ bool(self.new_bounds):
+            raise Exception("Both new_shape and new_bounds must be defined to "
+                            "use czt")
+        else:
+            self.use_czt = False
+
+    def propagate(self, wavefront: Wavefront) -> None:
         """
         Propagates wavefront.
         :param wavefront: Wavefront to be propagated.
         """
         pass
 
-    def _chirp_z_1d(self, x, m, f_lims, fs, endpoint=True, power_2=True):
+    def _chirp_z_1d(self, x: torch.Tensor, m: int, f_lims: List[float],
+                    fs: float, endpoint: bool = True, power_2: bool = True
+                    ) -> torch.Tensor:
         """
         1D chirp Z transform function. Generalisation of a DFT that can have
         different sampling in the input and output space. Good for focusing
@@ -69,7 +83,9 @@ class FreeSpace:
         y = y[..., slice(n-1, n+m-1)] * wk2
         return y
 
-    def _chirp_z_2d(self, x, m, f_lims, fs, endpoint=True, power_2=True):
+    def _chirp_z_2d(self, x: torch.Tensor, m: List[int], f_lims: List[float],
+                    fs: List[float], endpoint: bool = True,
+                    power_2: bool = True) -> torch.Tensor:
         """
         2D chirp Z transform function. Performs the transform on the last two
         dimensions of x. We apply the 1d function along the inner dimension then
@@ -96,18 +112,20 @@ class RayleighSommerfeldProp(FreeSpace):
     transform back. This is the most accurate propagation method.
     """
 
-    def __init__(self, z, pad=None, new_shape=None, new_bounds=None):
+    def __init__(self, z: float, pad: Optional[int] = None,
+                 new_shape: Optional[List[int]] = None,
+                 new_bounds: Optional[List[float]] = None) -> None:
         """
         :param z: Propagation distance.
         :param pad: Int setting padding amount. Default is none
         :param new_shape: Gives the shape of the output wavefront if using
          CZT transform [nx, ny]
         :param new_bounds: Gives the bounds of the output wavefront if using
-        CTZ transform [xmin, xmax, ymin, ymax].
+        CTZ transform [x_min, x_max, y_min, y_max].
         """
         super().__init__(z, pad, new_shape, new_bounds)
 
-    def propagate(self, wavefront):
+    def propagate(self, wavefront: Wavefront) -> None:
         """
         Propagates wavefront. Aperture is applied first to avoid complex
         wave-vector. If new_shape / new_bounds is set then a czt is used
@@ -127,7 +145,7 @@ class RayleighSommerfeldProp(FreeSpace):
         if self.pad:
             wavefront.pad_wavefront(self.pad)
 
-        wave_k = wavefront.omega / c_light
+        wave_k = wavefront.omega / self.c_light
         lambd = 2.0 * torch.pi / wave_k
         fx = fft.fftshift(fft.fftfreq(wavefront.n_samples_xy[0],
                                       d=wavefront.delta[0],
@@ -155,18 +173,20 @@ class RayleighSommerfeldProp(FreeSpace):
 
 class FresnelProp(FreeSpace):
 
-    def __init__(self, z, pad=None, new_shape=None, new_bounds=None):
+    def __init__(self, z: float, pad: Optional[int] = None,
+                 new_shape: Optional[List[int]] = None,
+                 new_bounds: Optional[List[float]] = None) -> None:
         """
         :param z: Propagation distance.
         :param pad: Int setting padding amount. Default is none
         :param new_shape: Gives the shape of the output wavefront if using
          CZT transform [nx, ny]
         :param new_bounds: Gives the bounds of the output wavefront if using
-        CTZ transform [xmin, xmax, ymin, ymax].
+        CTZ transform [x_min, x_max, y_min, y_max].
         """
         super().__init__(z, pad, new_shape, new_bounds)
 
-    def propagate(self, wavefront):
+    def propagate(self, wavefront: Wavefront) -> None:
         """
         Propagates wavefront. Aperture is applied first to avoid complex
         wave-vector. If new_shape / new_bounds is set then a czt is used
@@ -185,7 +205,7 @@ class FresnelProp(FreeSpace):
         if self.pad:
             wavefront.pad_wavefront(self.pad)
 
-        wave_k = wavefront.omega / c_light
+        wave_k = wavefront.omega / self.c_light
         lambd = 2.0 * torch.pi / wave_k
         fx = fft.fftshift(fft.fftfreq(wavefront.n_samples_xy[0],
                                       d=wavefront.delta[0],
@@ -219,7 +239,9 @@ class FraunhoferProp(FreeSpace):
     the Fresnel approximation holds.
     """
 
-    def __init__(self, z, pad=None, new_shape=None, new_bounds=None):
+    def __init__(self, z: float, pad: Optional[int] = None,
+                 new_shape: Optional[List[int]] = None,
+                 new_bounds: Optional[List[float]] = None) -> None:
         """
         :param z: Propagation distance (focal length is propagating to lens
                   focus)
@@ -227,29 +249,20 @@ class FraunhoferProp(FreeSpace):
         :param new_shape: Gives the shape of the output wavefront if using
          CZT transform [nx, ny]
         :param new_bounds: Gives the bounds of the output wavefront if using
-        CTZ transform [xmin, xmax, ymin, ymax].
+        CTZ transform [x_min, x_max, y_min, y_max].
         """
         super().__init__(z, pad, new_shape, new_bounds)
 
-    def propagate(self, wavefront):
+    def propagate(self, wavefront: Wavefront) -> None:
         """
         Propagates wavefront.
         :param wavefront: Wavefront to be propagated.
         """
 
-        if self.pad:
+        if self.pad is not None:
             wavefront.pad_wavefront(self.pad)
 
-        if self.new_shape and self.new_bounds:
-            use_czt = True
-        elif bool(self.new_shape) ^ bool(self.new_bounds):
-            use_czt = False
-            print("Both new_shape and new_bounds must be defined to use czt. "
-                  "Resorting back to fft.")
-        else:
-            use_czt = False
-
-        wave_k = wavefront.omega / c_light
+        wave_k = wavefront.omega / self.c_light
         lambd = 2.0 * torch.pi / wave_k
         delta_x = (wavefront.wf_bounds[1] - wavefront.wf_bounds[0]) \
                   / wavefront.n_samples_xy[0]
@@ -257,29 +270,31 @@ class FraunhoferProp(FreeSpace):
                   / wavefront.n_samples_xy[1]
         full_out_size = [lambd * self.z / delta_x, lambd * self.z / delta_y]
 
-        if not use_czt:
-            self.new_bounds = [-0.5 * full_out_size[0], 0.5 * full_out_size[0],
-                               -0.5 * full_out_size[1], 0.5 * full_out_size[1]]
+        if self.use_czt:
+            new_bounds = self.new_bounds
+            new_shape = self.new_shape
+        else:
+            new_bounds = [-0.5 * full_out_size[0], 0.5 * full_out_size[0],
+                          -0.5 * full_out_size[1], 0.5 * full_out_size[1]]
             new_shape = wavefront.n_samples_xy
 
         field = wavefront.field.reshape(2, wavefront.n_samples_xy[0],
                                         wavefront.n_samples_xy[1])
-        wavefront.update_bounds(self.new_bounds, self.new_shape)
+        wavefront.update_bounds(new_bounds, new_shape)
         c = 1. / (1j * lambd * self.z) \
             * torch.exp(1j * wave_k / (2. * self.z)
                         * (wavefront.x_array**2. + wavefront.y_array**2.))
 
-        if use_czt:
+        if self.use_czt:
             new_field = self._chirp_z_2d(field, self.new_shape, self.new_bounds,
                                          full_out_size) * c[None, :, :]
         else:
             new_field = fft.ifftshift(fft.fft2(torch.fft.fftshift(field)))\
                         * c[None, :, :]
-
         wavefront.z = wavefront.z + self.z
         wavefront.field = new_field.flatten(1, 2)
 
-
+'''
 class DebyeProp(FreeSpace):
     """
     Propagates the wavefront to the focus of a lens using the Debye-wolf method.
@@ -377,3 +392,4 @@ class DebyeProp(FreeSpace):
             wavefront.field = (field_x + field_y).flatten(1, 2)
         else:
             wavefront.field = (field_x + field_y).flatten(1, 2)[[0, 1]]
+'''

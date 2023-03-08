@@ -3,8 +3,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Optional, TypeVar, List
 
-TWavefront = TypeVar("TWavefront", bound="Wavefront")
-
 
 class Wavefront(torch.nn.Module):
     """
@@ -47,6 +45,11 @@ class Wavefront(torch.nn.Module):
         self.field = torch.zeros((dims, self.n_samples), dtype=torch.cfloat,
                                  device=device)
 
+        # Save the initial values in case we need to
+        self.z_0 = z
+        self.wf_bounds_0 = wf_bounds
+        self.n_samples_xy_0 = n_samples_xy
+
     def pad_wavefront(self, pad_fact: int = 2) -> None:
         """
         Pads the field with zeros to prevent artifacts from fourier
@@ -78,6 +81,7 @@ class Wavefront(torch.nn.Module):
             = self.field.reshape(self.dims, x_size_old, y_size_old)
         self.field = new_field.flatten(1, 2)
 
+    @torch.jit.export
     def update_bounds(self, bounds: List[float], n_samples_xy: List[int]
                       ) -> None:
         """
@@ -123,6 +127,32 @@ class Wavefront(torch.nn.Module):
                 new_field[:2, :] = self.field
         self.field = new_field
         self.dims = new_dims
+
+    def reset(self) -> None:
+        """
+        Resets the wavefront to the conditions when it was created. Used when
+        calculating the bun ch intensity.
+        """
+        self.z = self.z_0
+        self.wf_bounds = self.wf_bounds_0
+        self.n_samples_xy = self.n_samples_xy_0
+        self.n_samples = self.n_samples_xy[0] * self.n_samples_xy[1]
+        self.delta = [
+            (self.wf_bounds[1] - self.wf_bounds[0]) / self.n_samples_xy[0],
+            (self.wf_bounds[3] - self.wf_bounds[2]) / self.n_samples_xy[1]]
+        self.x_axis = torch.linspace(self.wf_bounds[0] + self.delta[0] / 2,
+                                     self.wf_bounds[1], self.n_samples_xy[0],
+                                     device=self.device)
+        self.y_axis = torch.linspace(self.wf_bounds[2] + self.delta[1] / 2,
+                                     self.wf_bounds[3], self.n_samples_xy[1],
+                                     device=self.device)
+        self.x_array, self.y_array = torch.meshgrid(self.x_axis, self.y_axis,
+                                                    indexing="ij")
+        self.coords = torch.stack((self.x_array, self.y_array,
+                                   self.z * torch.ones_like(self.x_array)),
+                                  dim=0).flatten(1, 2)
+        self.field = torch.zeros((self.dims, self.n_samples),
+                                 dtype=torch.cfloat, device=self.device)
 
     def switch_device(self, device: torch.device) -> "Wavefront":
         """
