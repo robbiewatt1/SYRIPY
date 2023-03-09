@@ -15,27 +15,12 @@ class OpticsContainer:
          in order.
         """
         self.element_array = element_array
-        self.out_bounds = None
-        self.out_shape = None
-
-        # Get the shape of the field at the end
-        for element in element_array:
-            if element.new_bounds:
-                self.out_bounds = element.new_bounds
-            if element.new_shape:
-                self.out_shape = element.new_shape
 
     def add_element(self, element: OpticalElement) -> None:
         """
         :param element: Element to be added to the list.
         """
         self.element_array.append(element)
-
-        # Check if new element updates output shape
-        if element.new_bounds:
-            self.out_bounds = element.new_bounds
-        if element.new_shape:
-            self.out_shape = element.new_shape
 
     def propagate(self, wavefront: Wavefront) -> None:
         """

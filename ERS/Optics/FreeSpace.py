@@ -19,9 +19,8 @@ class FreeSpace(OpticalElement):
         :param new_bounds: Gives the bounds of the output wavefront if using
          CTZ transform [x_min, x_max, y_min, y_max].
         """
-        super().__init__()
+        super().__init__(pad)
         self.z = z
-        self.pad = pad
         self.new_shape = new_shape
         self.new_bounds = new_bounds
         self.c_light = 0.29979245
@@ -39,7 +38,7 @@ class FreeSpace(OpticalElement):
         Propagates wavefront.
         :param wavefront: Wavefront to be propagated.
         """
-        pass
+        super().propagate(wavefront)
 
     def _chirp_z_1d(self, x: torch.Tensor, m: int, f_lims: List[float],
                     fs: float, endpoint: bool = True, power_2: bool = True
@@ -132,6 +131,7 @@ class RayleighSommerfeldProp(FreeSpace):
         rather than a fourier transform. CZT does not need padding.
         :param wavefront: Wavefront to be propagated.
         """
+        super().propagate(wavefront)
 
         if self.new_shape and self.new_bounds:
             use_czt = True
@@ -141,9 +141,6 @@ class RayleighSommerfeldProp(FreeSpace):
                   "Resorting back to fft.")
         else:
             use_czt = False
-
-        if self.pad:
-            wavefront.pad_wavefront(self.pad)
 
         wave_k = wavefront.omega / self.c_light
         lambd = 2.0 * torch.pi / wave_k
@@ -193,6 +190,8 @@ class FresnelProp(FreeSpace):
         rather than a fourier transform. CZT does not need padding.
         :param wavefront: Wavefront to be propagated.
         """
+        super().propagate(wavefront)
+
         if self.new_shape and self.new_bounds:
             use_czt = True
         elif bool(self.new_shape) ^ bool(self.new_bounds):
@@ -201,9 +200,6 @@ class FresnelProp(FreeSpace):
                   "Resorting back to fft.")
         else:
             use_czt = False
-
-        if self.pad:
-            wavefront.pad_wavefront(self.pad)
 
         wave_k = wavefront.omega / self.c_light
         lambd = 2.0 * torch.pi / wave_k
@@ -258,9 +254,7 @@ class FraunhoferProp(FreeSpace):
         Propagates wavefront.
         :param wavefront: Wavefront to be propagated.
         """
-
-        if self.pad is not None:
-            wavefront.pad_wavefront(self.pad)
+        super().propagate(wavefront)
 
         wave_k = wavefront.omega / self.c_light
         lambd = 2.0 * torch.pi / wave_k

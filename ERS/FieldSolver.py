@@ -42,7 +42,7 @@ class FieldSolver(torch.nn.Module):
 
     def set_dt(self, new_samples: int, t_start: Optional[float] = None,
                t_end: Optional[float] = None, n_sample: Optional[float] = None,
-               flat_power: float = 0.5, set_bunch: bool = False) -> None:
+               flat_power: float = 0.25, set_bunch: bool = False) -> None:
         """
         Sets the track samples based on large values of objective function
         obj = |grad(1/grad(g))|. Where g(t) is the phase function. Takes sample

@@ -50,6 +50,7 @@ class Wavefront(torch.nn.Module):
         self.wf_bounds_0 = wf_bounds
         self.n_samples_xy_0 = n_samples_xy
 
+    @torch.jit.export
     def pad_wavefront(self, pad_fact: int = 2) -> None:
         """
         Pads the field with zeros to prevent artifacts from fourier
@@ -57,8 +58,12 @@ class Wavefront(torch.nn.Module):
         :param pad_fact: Padding scaling factor
         """
         x_size_old, y_size_old = self.n_samples_xy[0], self.n_samples_xy[1]
-        self.wf_bounds = self.wf_bounds * pad_fact
-        self.n_samples_xy = self.n_samples_xy * pad_fact
+        self.wf_bounds = [self.wf_bounds[0] * pad_fact,
+                          self.wf_bounds[1] * pad_fact,
+                          self.wf_bounds[2] * pad_fact,
+                          self.wf_bounds[3] * pad_fact]
+        self.n_samples_xy = [self.n_samples_xy[0] * pad_fact,
+                             self.n_samples_xy[0] * pad_fact]
         self.n_samples = self.n_samples_xy[0] * self.n_samples_xy[1]
         self.x_axis = torch.linspace(self.wf_bounds[0] + self.delta[0] / 2,
                                      self.wf_bounds[1], self.n_samples_xy[0],

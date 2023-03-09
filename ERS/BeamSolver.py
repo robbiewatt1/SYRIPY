@@ -5,9 +5,7 @@ from .Tracking import Track
 from .Optics import OpticsContainer
 from typing import Optional, Dict, Tuple
 import copy
-import matplotlib.pyplot as plt
 
-# TODO need to add multi device looping
 
 
 class BeamSolver:
@@ -73,30 +71,19 @@ class BeamSolver:
         if not n_part:
             n_part = self.track.bunch_r.shape[0]
 
-        # Get the field final x and y axes
-        if (self.optics_container is None or self.optics_container.out_shape
-                is None):
-            x_axis = self.solver.wavefront.x_axis
-            y_axis = self.solver.wavefront.y_axis
-        else:
-            x_axis = torch.linspace(self.optics_container.out_bounds[0],
-                                    self.optics_container.out_bounds[1],
-                                    self.optics_container.out_shape[0])
-            y_axis = torch.linspace(self.optics_container.out_bounds[2],
-                                    self.optics_container.out_bounds[3],
-                                    self.optics_container.out_shape[1])
+        # Calculate first particle to get the right intensity shape
+        wavefront = self.solver.solve_field(blocks, solve_ends, True, 0)
+
+        # Propagate the wavefront if we need to
+        if self.optics_container is not None:
+            self.optics_container.propagate(wavefront)
+        intensity_total = wavefront.get_intensity()
+        x_axis = self.solver.wavefront.x_axis
+        y_axis = self.solver.wavefront.y_axis
 
         if n_device == 1:  # Single device case, things are easy
-            # Set the intensity array, depends on the final shape in the optics
-            if (self.optics_container is None or self.optics_container.out_shape
-                    is None):
-                intensity_total = torch.zeros_like(self.wavefront.x_array,
-                                                   device=self.solver.device)
-            else:
-                intensity_total = torch.zeros(self.optics_container.out_shape,
-                                              device=self.solver.device)
-
-            for index in range(n_part):  # Loop particles
+            # Now we can loop particles and stack
+            for index in range(1, n_part):  # Loop particles
                 wavefront = self.solver.solve_field(blocks, solve_ends, True,
                                                     index)
 
@@ -110,15 +97,10 @@ class BeamSolver:
             n_part = n_device * int(n_part / n_device)
 
             # Define the intensity tensors on all devices
-            if (self.optics_container is None or self.optics_container.out_shape
-                    is None):
-                intensity_dev = [torch.zeros_like(
-                    self.wavefront.x_array, device=torch.device(f"cuda:{i}"))
-                    for i in range(n_device)]
-            else:
-                intensity_dev = [torch.zeros(self.optics_container.out_shape,
-                                             device=torch.device(f"cuda:{i}"))
-                                 for i in range(n_device)]
+
+            intensity_dev = [torch.zeros_like(
+                intensity_total, device=torch.device(f"cuda:{i}"))
+                for i in range(n_device)]
 
             # Set up the list of solvers and send to devices (confusing sorry!)
             solvers = [self.solver.solve_field]
@@ -144,7 +126,7 @@ class BeamSolver:
                     intensity_dev[dev_idx] += wavefronts[dev_idx].get_intensity()
 
             # Now send everything to the first device which we assume is cuda:0
-            intensity_total = torch.zeros_like(self.wavefront.x_array,
+            intensity_total = torch.zeros_like(intensity_total,
                                                device=torch.device("cuda:0"))
             for i, intensity in enumerate(intensity_dev):
                 intensity_total += intensity.to("cuda:0")
