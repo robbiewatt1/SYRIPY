@@ -210,12 +210,11 @@ class FresnelProp(FreeSpace):
                                       d=wavefront.delta[1],
                                       device=wavefront.device))
         fx, fy = torch.meshgrid(fx, fy, indexing="ij")
-        tran_func = torch.exp(-1j * torch.pi * lambd * self.z
-                              * (fx**2. + fy**2))
-        tran_func = torch.exp(torch.tensor(1j * wave_k * self.z)) * tran_func
+        tran_func = fft.fftshift(torch.exp(-1j * torch.pi * lambd * self.z
+                                           * (fx**2. + fy**2)))
         field = wavefront.field.reshape(2, wavefront.n_samples_xy[0],
                                         wavefront.n_samples_xy[1])
-        field = fft.fft2(fft.fftshift(field))
+        field = fft.ifftshift(fft.fft2(field))
 
         if use_czt:
             new_field = self._chirp_z_2d(field, self.new_shape, self.new_bounds,
@@ -224,7 +223,8 @@ class FresnelProp(FreeSpace):
             wavefront.update_bounds(self.new_bounds, self.new_shape)
         else:
             new_field = fft.ifftshift(fft.ifft2(field * tran_func[None, :, :]))
-        wavefront.field = new_field.flatten(1, 2)
+        wavefront.field = (torch.exp(torch.tensor(1j * wave_k * self.z))
+                           * new_field).flatten(1, 2)
         wavefront.z = wavefront.z + self.z
 
 
@@ -263,6 +263,7 @@ class FraunhoferProp(FreeSpace):
         delta_y = (wavefront.wf_bounds[3] - wavefront.wf_bounds[2])\
                   / wavefront.n_samples_xy[1]
         full_out_size = [lambd * self.z / delta_x, lambd * self.z / delta_y]
+        print(delta_x, delta_y)
 
         if self.use_czt:
             new_bounds = self.new_bounds
@@ -280,11 +281,12 @@ class FraunhoferProp(FreeSpace):
                         * (wavefront.x_array**2. + wavefront.y_array**2.))
 
         if self.use_czt:
-            new_field = self._chirp_z_2d(field, self.new_shape, self.new_bounds,
-                                         full_out_size) * c[None, :, :]
+            new_field = self._chirp_z_2d(
+                field, self.new_shape, self.new_bounds, full_out_size)\
+                        * c[None, :, :] * delta_x * delta_y
         else:
             new_field = fft.ifftshift(fft.fft2(torch.fft.fftshift(field)))\
-                        * c[None, :, :]
+                        * c[None, :, :] * delta_x * delta_y
         wavefront.z = wavefront.z + self.z
         wavefront.field = new_field.flatten(1, 2)
 
