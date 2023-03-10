@@ -4,7 +4,7 @@ import torch.linalg
 import matplotlib.pyplot as plt
 from .cTrack import cTrack
 from .Magnets import FieldContainer
-from typing import Optional, TypeVar, List
+from typing import Optional, List
 
 c_light = 0.29979245
 
@@ -15,17 +15,21 @@ class Track(torch.nn.Module):
     can either be solved using an RK4 method or loaded from an external file.
     """
 
-    def __init__(self, device: Optional[torch.device] = None) -> None:
+    def __init__(self, device: Optional[torch.device] = None,
+                 requires_grad: bool = False) -> None:
         """
         :param device: Device being used (cpu / gpu)
         """
         super().__init__()
         # Load from track file
         self.device = device
-        self.time = None  # Proper time along particle path
-        self.r = None     # Particle position
-        self.p = None     # Particle momentum
-        self.beta = None  # Velocity along particle path
+        self.requires_grad = requires_grad
+
+        self.time = None   # Proper time along particle path
+        self.r = None      # Particle position
+        self.p = None      # Particle momentum
+        self.beta = None   # Velocity along particle path
+        self.gamma = None  # Loretnz factor og particle
 
         self.bunch_time = None  # Bunch time samples
         self.bunch_r = None  # bunch position
@@ -112,9 +116,16 @@ class Track(torch.nn.Module):
         """
         # TODO add some checks to make sure setup is ok. e.g. check that
         #  starting position is inside first field element
+
+        if self.requires_grad:
+            r_0.requires_grad = True
+            d_0.requires_grad = True
+            gamma = torch.tensor(gamma, requires_grad=True)
+
         self.time = time
         self.r = torch.zeros((self.time.shape[0], 3))
         self.p = torch.zeros((self.time.shape[0], 3))
+        self.gamma = gamma
 
         detla_t = (time[1] - time[0])
         delta_t_2 = detla_t / 2.
@@ -123,27 +134,30 @@ class Track(torch.nn.Module):
         self.p[0] = c_light * (gamma**2.0 - 1.)**0.5 * d_0 / torch.norm(d_0)
 
         for i, t in enumerate(time[:-1]):
-            field = field_container.get_field(self.r[i])
+            field = field_container.get_field(self.r[i].clone())
 
-            r_k1 = self._dr_dt(self.p[i])
-            p_k1 = self._dp_dt(self.p[i], field)
+            r_k1 = self._dr_dt(self.p[i].clone())
+            p_k1 = self._dp_dt(self.p[i].clone(), field)
 
-            field = field_container.get_field(self.r[i] + r_k1 * delta_t_2)
-            r_k2 = self._dr_dt(self.p[i] + p_k1 * delta_t_2)
-            p_k2 = self._dp_dt(self.p[i] + p_k1 * delta_t_2, field)
+            field = field_container.get_field(self.r[i].clone() + r_k1
+                                              * delta_t_2)
+            r_k2 = self._dr_dt(self.p[i].clone() + p_k1 * delta_t_2)
+            p_k2 = self._dp_dt(self.p[i].clone() + p_k1 * delta_t_2, field)
 
-            field = field_container.get_field(self.r[i] + r_k2 * delta_t_2)
-            r_k3 = self._dr_dt(self.p[i] + p_k2 * delta_t_2)
-            p_k3 = self._dp_dt(self.p[i] + p_k2 * delta_t_2, field)
+            field = field_container.get_field(self.r[i].clone() + r_k2
+                                              * delta_t_2)
+            r_k3 = self._dr_dt(self.p[i].clone() + p_k2 * delta_t_2)
+            p_k3 = self._dp_dt(self.p[i].clone() + p_k2 * delta_t_2, field)
 
-            field = field_container.get_field(self.r[i] + r_k3 * detla_t)
-            r_k4 = self._dr_dt(self.p[i] + p_k3 * detla_t)
-            p_k4 = self._dp_dt(self.p[i] + p_k3 * detla_t, field)
+            field = field_container.get_field(self.r[i].clone() + r_k3
+                                              * detla_t)
+            r_k4 = self._dr_dt(self.p[i].clone() + p_k3 * detla_t)
+            p_k4 = self._dp_dt(self.p[i].clone() + p_k3 * detla_t, field)
 
-            self.r[i+1] = self.r[i] + (detla_t / 6.) \
+            self.r[i+1] = self.r[i].clone() + (detla_t / 6.) \
                           * (r_k1 + 2. * r_k2 + 2. * r_k3 + r_k4)
-            self.p[i+1] = self.p[i] + (detla_t / 6.) \
-                             * (p_k1 + 2. * p_k2 + 2. * p_k3 + p_k4)
+            self.p[i+1] = self.p[i].clone() + (detla_t / 6.)\
+                          * (p_k1 + 2. * p_k2 + 2. * p_k3 + p_k4)
 
         self.beta = self.p / (c_light**2.0 + torch.sum(self.p * self.p,
                                                        dim=1)[:, None])**0.5
@@ -187,6 +201,11 @@ class Track(torch.nn.Module):
         :param d_0: Initial direction of particle
         :param gamma: Initial lorentz factor of particle
         """
+
+        if self.requires_grad:
+            raise Exception("Gradients can't be calculated using c tracker. Use"
+                  " 'sim_single' instead.")
+
         r0_c = cTrack.ThreeVector(r_0[0], r_0[1], r_0[2])
         d0_c = cTrack.ThreeVector(d_0[0], d_0[1], d_0[2])
         field = field_container.gen_c_container()
@@ -200,6 +219,7 @@ class Track(torch.nn.Module):
         self.time = torch.tensor(time).to(self.device)
         self.r = torch.tensor(r).to(self.device).T
         self.beta = torch.tensor(beta).to(self.device).T
+        self.gamma = gamma
 
     def sim_bunch_c(self, n_part: int, field_container: FieldContainer,
                     time: torch.Tensor, r_0: torch.Tensor, d_0: torch.Tensor,
@@ -216,6 +236,10 @@ class Track(torch.nn.Module):
         :param bunch_params: torch.Tensor of 2nd order moments in the format:
          [sig_x, sig_x_xp, sig_xp, sig_x, sig_y_yp, sig_yp, sig_gamma]
         """
+
+        if self.requires_grad:
+            raise Exception("Gradients can't be calculated using c tracker. Use"
+                  " 'Track.sim_single' instead.")
 
         # First we simulate the central track
         self.sim_single_c(field_container, time, r_0, d_0, gamma)
@@ -235,3 +259,4 @@ class Track(torch.nn.Module):
         self.bunch_r = torch.tensor(r.transpose((0, 2, 1))).to(self.device)
         self.bunch_beta = torch.tensor(beta.transpose((0, 2, 1))).to(
             self.device)
+        self.gamma = gamma
