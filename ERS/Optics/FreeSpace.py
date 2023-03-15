@@ -67,7 +67,7 @@ class FreeSpace(OpticalElement):
         else:
             scale = (f_lims[1] - f_lims[0]) / fs
 
-        wk2 = torch.exp(-(1j * np.pi * scale * k ** 2) / m)
+        wk2 = torch.exp((-1j * np.pi * scale * k ** 2) / m)
         awk2 = torch.exp(-2j * np.pi * f_lims[0]/fs * k[:n]) * wk2[:n]
 
         if power_2:
@@ -102,6 +102,26 @@ class FreeSpace(OpticalElement):
         y = self._chirp_z_1d(torch.swapaxes(y, -1, -2), m[0],
                              [f_lims[0], f_lims[1]], fs[0], endpoint, power_2)
         return torch.swapaxes(y, -1, -2)
+
+    def _inv_chirp_z_2d(self, x: torch.Tensor, m: List[int],
+                        f_lims: List[float], fs: List[float],
+                        endpoint: bool = True, power_2: bool = True
+                        ) -> torch.Tensor:
+        """
+        2D inverse chirp Z transform function. Used function above but flips and
+         normalises the output
+        :param x: 2d signal array.
+        :param m: Dimension of output array [mx, my].
+        :param f_lims: Frequency limits [fx0, fx1, fy0, fy1]
+        :param fs: Total length of output space [fsx, fsy].
+        :param endpoint: If true, f_lims[1] / f_lims[3] are included.
+        :param power_2: If true, array will be padded before fft to power of 2
+        :return y: Transformed result
+        """
+        #fs = [-fs[0], -fs[1]]
+        f_lims = [-f_lims[0], -f_lims[1], -f_lims[2], -f_lims[3]]
+        y = self._chirp_z_2d(x, m, f_lims, fs, endpoint, power_2)
+        return y / (x.shape[1] * x.shape[2])
 
 
 class RayleighSommerfeldProp(FreeSpace):
@@ -172,16 +192,24 @@ class FresnelProp(FreeSpace):
 
     def __init__(self, z: float, pad: Optional[int] = None,
                  new_shape: Optional[List[int]] = None,
-                 new_bounds: Optional[List[float]] = None) -> None:
+                 new_bounds: Optional[List[float]] = None,
+                 fourier_shape: Optional[List[int]] = None,
+                 fourier_bounds: Optional[List[float]] = None) -> None:
         """
         :param z: Propagation distance.
         :param pad: Int setting padding amount. Default is none
-        :param new_shape: Gives the shape of the output wavefront if using
+        :param new_shape: The shape of the output wavefront if using
          CZT transform [nx, ny]
-        :param new_bounds: Gives the bounds of the output wavefront if using
-        CTZ transform [x_min, x_max, y_min, y_max].
+        :param new_bounds: The bounds of the output wavefront if using
+        CZT transform [x_min, x_max, y_min, y_max].
+        :param fourier_shape: The shape of the fourier plane if using the CZT
+         transform for first transform.
+        param fourier_bounds: The bounds of the fourier plane if using the CZT
+         transform for first transform.
         """
         super().__init__(z, pad, new_shape, new_bounds)
+        self.fourier_shape = fourier_shape
+        self.fourier_bounds = fourier_bounds
 
     def propagate(self, wavefront: Wavefront) -> None:
         """
@@ -192,37 +220,56 @@ class FresnelProp(FreeSpace):
         """
         super().propagate(wavefront)
 
-        if self.new_shape and self.new_bounds:
-            use_czt = True
-        elif bool(self.new_shape) ^ bool(self.new_bounds):
-            use_czt = False
+        if self.fourier_shape and self.fourier_bounds:
+            use_czt_f = True
+        elif bool(self.fourier_shape) ^ bool(self.fourier_bounds):
+            use_czt_f = False
             print("Both new_shape and new_bounds must be defined to use czt. "
                   "Resorting back to fft.")
         else:
-            use_czt = False
+            use_czt_f = False
 
         wave_k = wavefront.omega / self.c_light
         lambd = 2.0 * torch.pi / wave_k
-        fx = fft.fftshift(fft.fftfreq(wavefront.n_samples_xy[0],
-                                      d=wavefront.delta[0],
-                                      device=wavefront.device))
-        fy = fft.fftshift(fft.fftfreq(wavefront.n_samples_xy[1],
-                                      d=wavefront.delta[1],
-                                      device=wavefront.device))
-        fx, fy = torch.meshgrid(fx, fy, indexing="ij")
-        tran_func = fft.fftshift(torch.exp(-1j * torch.pi * lambd * self.z
-                                           * (fx**2. + fy**2)))
         field = wavefront.field.reshape(2, wavefront.n_samples_xy[0],
                                         wavefront.n_samples_xy[1])
-        field = fft.ifftshift(fft.fft2(field))
 
-        if use_czt:
-            new_field = self._chirp_z_2d(field, self.new_shape, self.new_bounds,
-                            [wavefront.wf_bounds[1] - wavefront.wf_bounds[0],
-                             wavefront.wf_bounds[3] - wavefront.wf_bounds[1]])
+        if use_czt_f:  # Using czt in first transform
+            delta_x = 1. / (self.fourier_bounds[1] - self.fourier_bounds[0])
+            delta_y = 1. / (self.fourier_bounds[3] - self.fourier_bounds[2])
+            field = fft.fftshift(self._chirp_z_2d(
+                field, self.fourier_shape, self.fourier_bounds,
+                [1. / wavefront.delta[0], 1. / wavefront.delta[1]]))
+            fx = fft.fftfreq(self.fourier_shape[0],
+                                          d=delta_x, device=wavefront.device)
+            fy = fft.fftfreq(self.fourier_shape[1],
+                                          d=delta_y, device=wavefront.device)
+            fx, fy = torch.meshgrid(fx, fy, indexing="ij")
+
+            field = field * torch.exp(
+                -1j * torch.pi * lambd * self.z * (fx**2. + fy**2))[None, :, :]
+            wavefront.update_bounds(wavefront.wf_bounds, self.fourier_shape)
+        else:  # Just using standard fft
+            field = fft.fft2(fft.fftshift(field))
+            fx = fft.fftfreq(wavefront.n_samples_xy[0],
+                             d=wavefront.delta[0], device=wavefront.device)
+            fy = fft.fftfreq(wavefront.n_samples_xy[1],
+                             d=wavefront.delta[1], device=wavefront.device)
+            fx, fy = torch.meshgrid(fx, fy, indexing="ij")
+            field = field * torch.exp(-1j * torch.pi * lambd * self.z
+                                          * (fx**2. + fy**2))[None, :, :]
+        if self.use_czt:
+            old_cx = (wavefront.wf_bounds[1] + wavefront.wf_bounds[0]) / 2
+            old_cy = (wavefront.wf_bounds[3] + wavefront.wf_bounds[2]) / 2
+            f_lims = [self.new_bounds[0] - old_cx, self.new_bounds[1] - old_cx,
+                      self.new_bounds[2] - old_cy, self.new_bounds[3] - old_cy]
+            new_field = self._inv_chirp_z_2d(torch.fft.ifftshift(
+                field), self.new_shape, f_lims,
+                [wavefront.wf_bounds[1] - wavefront.wf_bounds[0],
+                 wavefront.wf_bounds[3] - wavefront.wf_bounds[2]])
             wavefront.update_bounds(self.new_bounds, self.new_shape)
         else:
-            new_field = fft.ifftshift(fft.ifft2(field * tran_func[None, :, :]))
+            new_field = fft.ifftshift(fft.ifft2(field))
         wavefront.field = (torch.exp(torch.tensor(1j * wave_k * self.z))
                            * new_field).flatten(1, 2)
         wavefront.z = wavefront.z + self.z
@@ -263,7 +310,6 @@ class FraunhoferProp(FreeSpace):
         delta_y = (wavefront.wf_bounds[3] - wavefront.wf_bounds[2])\
                   / wavefront.n_samples_xy[1]
         full_out_size = [lambd * self.z / delta_x, lambd * self.z / delta_y]
-        print(delta_x, delta_y)
 
         if self.use_czt:
             new_bounds = self.new_bounds

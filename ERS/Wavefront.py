@@ -58,12 +58,16 @@ class Wavefront(torch.nn.Module):
         :param pad_fact: Padding scaling factor
         """
         x_size_old, y_size_old = self.n_samples_xy[0], self.n_samples_xy[1]
-        self.wf_bounds = [self.wf_bounds[0] * pad_fact,
-                          self.wf_bounds[1] * pad_fact,
-                          self.wf_bounds[2] * pad_fact,
-                          self.wf_bounds[3] * pad_fact]
+        centre = [(self.wf_bounds[1] + self.wf_bounds[0]) / 2,
+                  (self.wf_bounds[3] + self.wf_bounds[2]) / 2]
+        length = [(self.wf_bounds[1] - self.wf_bounds[0]) / 2,
+                  (self.wf_bounds[3] - self.wf_bounds[2]) / 2]
+        self.wf_bounds = [centre[0] - pad_fact * length[0],
+                          centre[0] + pad_fact * length[0],
+                          centre[1] - pad_fact * length[1],
+                          centre[1] + pad_fact * length[1]]
         self.n_samples_xy = [self.n_samples_xy[0] * pad_fact,
-                             self.n_samples_xy[0] * pad_fact]
+                             self.n_samples_xy[1] * pad_fact]
         self.n_samples = self.n_samples_xy[0] * self.n_samples_xy[1]
         self.x_axis = torch.linspace(self.wf_bounds[0] + self.delta[0] / 2,
                                      self.wf_bounds[1], self.n_samples_xy[0],
@@ -85,6 +89,35 @@ class Wavefront(torch.nn.Module):
                   self.n_samples_xy[1] // 2 + y_size_old // 2] \
             = self.field.reshape(self.dims, x_size_old, y_size_old)
         self.field = new_field.flatten(1, 2)
+
+    def interpolate_wavefront(self, fact: int) -> None:
+        """
+        Increases the wavefront resolution using interpolation.
+        :param fact: Factor to increase resolution by
+        """
+        self.field = self.field.reshape(2, self.n_samples_xy[0],
+                                        self.n_samples_xy[1])
+        # Stupid function doesn't work for complex so take this out as batch
+        self.field = torch.stack([self.field.real, self.field.imag])
+        self.field = torch.nn.functional.interpolate(
+            self.field, scale_factor=(fact, fact), mode="bilinear",
+            antialias=True)
+        self.field = self.field[0] + 1j * self.field[1]
+        self.field = self.field.flatten(1, 2)
+
+        self.n_samples_xy = [self.n_samples_xy[0] * fact,
+                             self.n_samples_xy[0] * fact]
+        self.x_axis = torch.linspace(self.wf_bounds[0] + self.delta[0] / 2,
+                                     self.wf_bounds[1], self.n_samples_xy[0],
+                                     device=self.device)
+        self.y_axis = torch.linspace(self.wf_bounds[2] + self.delta[1] / 2,
+                                     self.wf_bounds[3], self.n_samples_xy[1],
+                                     device=self.device)
+        self.x_array, self.y_array = torch.meshgrid(self.x_axis, self.y_axis,
+                                                    indexing="ij")
+        self.coords = torch.stack((self.x_array, self.y_array,
+                                   self.z * torch.ones_like(self.x_array)),
+                                  dim=0).flatten(1, 2)
 
     @torch.jit.export
     def update_bounds(self, bounds: List[float], n_samples_xy: List[int]
@@ -250,24 +283,21 @@ class Wavefront(torch.nn.Module):
         """
         phase = torch.angle(self.field[dim]).reshape(self.n_samples_xy[0],
                                                      self.n_samples_xy[1]).T
-        fig, ax = plt.subplots()
-        ax.pcolormesh(phase.cpu().detach().numpy(),
-                      cmap="jet", shading='auto')
 
         fig, ax = plt.subplots()
         if lineout:  # 1D plot
             if lineout[0] == 0:
                 ax.plot(self.y_axis.cpu().detach().numpy(),
-                        phase[lineout[1], :])
+                        phase.cpu().detach().numpy()[lineout[1], :])
             else:
                 ax.plot(self.x_axis.cpu().detach().numpy(),
-                        phase[:, lineout[1]])
+                        phase.cpu().detach().numpy()[:, lineout[1]])
 
         else:  # 2D plot
             pcol = ax.pcolormesh(
                 self.x_axis.cpu().detach().numpy()[::ds_fact],
                 self.y_axis.cpu().detach().numpy()[::ds_fact],
-                phase[::ds_fact, ::ds_fact],
+                phase.cpu().detach().numpy()[::ds_fact, ::ds_fact],
                 cmap="jet", shading='auto')
             fig.colorbar(pcol)
 
@@ -275,18 +305,3 @@ class Wavefront(torch.nn.Module):
             ax.set_xlim(axes_lim[0], axes_lim[1])
             ax.set_ylim(axes_lim[2], axes_lim[3])
         return fig, ax
-
-    """
-    def copy(self, memo) -> TWavefront:
-
-        Overloads the deep copy
-        :param memo:
-        :return:
-
-        deepcopy_method = self.__deepcopy__
-        self.__deepcopy__ = None
-        wf_copy = deepcopy(self, memo)
-        self.__deepcopy__ = deepcopy_method
-        wf_copy.__deepcopy__ = deepcopy_method
-        return wf_copy
-    """
