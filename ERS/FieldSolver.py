@@ -2,7 +2,7 @@ import torch
 from .Wavefront import Wavefront
 from .Tracking import Track
 from .Optics import OpticsContainer
-from typing import Optional
+from typing import Optional, Union
 
 # TODO Change things so that the field is saved as a 2d array rather than 1
 # TODO Add checks to make sure track has already been solved
@@ -114,7 +114,8 @@ class FieldSolver(torch.nn.Module):
 
     @torch.jit.export
     def solve_field(self, blocks: int = 1, solve_ends: bool = True,
-                    reset: bool = True, bunch_index: Optional[int] = None
+                    reset: bool = True,
+                    bunch_index: Union[int, torch.Tensor] = None
                     ) -> Wavefront:
         """
         Main function to solve the radiation field at the wavefront.
@@ -127,7 +128,6 @@ class FieldSolver(torch.nn.Module):
         :param bunch_index: Index of bunch track. If none then central track is
          used.
         """
-
         if reset:
             self.wavefront.reset()
 
@@ -141,9 +141,12 @@ class FieldSolver(torch.nn.Module):
         if bunch_index is None:
             r = self.track.r
             beta = self.track.beta
-        else:
+        elif isinstance(bunch_index, int):
             r = self.track.bunch_r[bunch_index]
             beta = self.track.bunch_beta[bunch_index]
+        else:  # Need to do this fix to avoid using .item()
+            r = self.track.bunch_r[bunch_index[None]][0]
+            beta = self.track.bunch_beta[bunch_index[None]][0]
 
         # Loop blocks and perform calculation
         block_size = int(self.wavefront.coords.shape[1] / blocks)
@@ -195,8 +198,11 @@ class FieldSolver(torch.nn.Module):
                               * int2[..., -1]
                               + torch.sin(self.wavefront.omega * phase[..., 0])
                               * int2[..., 0]) / self.wavefront.omega
-
-            self.wavefront.field[:, bi:bf] = (real_part + 1j * imag_part) \
+            if blocks > 1:  # First method doesn't work with vmap so need this
+                self.wavefront.field[:, bi:bf] = (real_part + 1j * imag_part)\
+                                * torch.exp(1j * self.wavefront.omega * phase0)
+            else:
+                self.wavefront.field = (real_part + 1j * imag_part)\
                                 * torch.exp(1j * self.wavefront.omega * phase0)
         return self.wavefront
 

@@ -1,7 +1,6 @@
 import torch
 import torch.fft as fft
 import numpy as np
-import math
 from ..Wavefront import Wavefront
 from .OpticalElement import OpticalElement
 from typing import List, Optional
@@ -118,7 +117,6 @@ class FreeSpace(OpticalElement):
         :param power_2: If true, array will be padded before fft to power of 2
         :return y: Transformed result
         """
-        #fs = [-fs[0], -fs[1]]
         f_lims = [-f_lims[0], -f_lims[1], -f_lims[2], -f_lims[3]]
         y = self._chirp_z_2d(x, m, f_lims, fs, endpoint, power_2)
         return y / (x.shape[1] * x.shape[2])
