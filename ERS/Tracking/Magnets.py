@@ -13,7 +13,8 @@ class FieldBlock:
     # TODO need to add the direction of the magnet
     def __init__(self, center_pos: torch.Tensor, length: float,
                  B0: torch.Tensor, direction: Optional[torch.Tensor] = None,
-                 edge_length: float = 0.) -> None:
+                 edge_length: float = 0., device: Optional[torch.device] = None
+                 ) -> None:
         """
         :param center_pos: Central position of the magnet.
         :param length: Length of main part of field.
@@ -22,11 +23,12 @@ class FieldBlock:
             by default
         :param edge_length: Length for field to fall by 10 %. 0 for hard edge or
             > 0 for soft edge with B0 / (1 + (z / d)**2)**2 dependence.
+        :param device: Device being used (e.g. cpu / gpu)
         """
-        self.center_pos = center_pos
+        self.center_pos = center_pos.to(device)
         self.length = length
-        self.B0 = B0 / (me / (qe * 1.e-9))
-        self.direction = direction
+        self.B0 = (B0 / (me / (qe * 1.e-9))).to(device)
+        self.direction = direction  # Not yet implemented
         self.edge_length = edge_length
         self.edge_scaled = edge_length / (10.**0.5 - 1)**0.5
         self.order = 0
@@ -39,14 +41,14 @@ class FieldBlock:
         """
         pass
 
-    def _fridge(self, b: torch.Tensor, z: float) -> torch.Tensor:
+    def _fridge(self, b: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         """
         Calculates the fringe field at a given location.
         :param b: Field vector at edge.
         :param z: Distance from end of main field.
         :return: Fringe field vector [bx, by, bz] (bx always 0)
         """
-        return b / (1 + (z / self.edge_scaled)**2.)**2.
+        return b[None] / (1 + (z[:, None] / self.edge_scaled)**2.)**2.
 
 
 class Dipole(FieldBlock):
@@ -57,7 +59,8 @@ class Dipole(FieldBlock):
 
     def __init__(self, center_pos: torch.Tensor, length: float,
                  B0: torch.Tensor, direction: Optional[torch.Tensor] = None,
-                 edge_length: float = 0.) -> None:
+                 edge_length: float = 0., device: Optional[torch.device] = None
+                 ) -> None:
         """
         :param center_pos: Central position of the magnet.
         :param length: Length of main part of field.
@@ -66,8 +69,9 @@ class Dipole(FieldBlock):
          by default
         :param edge_length: Length for field to fall by 10 %. 0 for hard edge or
          > 0 for soft edge with B0 / (1 + (z / d)**2)**2 dependence.
+        :param device: Device being used (e.g. cpu / gpu)
         """
-        super().__init__(center_pos, length, B0, direction, edge_length)
+        super().__init__(center_pos, length, B0, direction, edge_length, device)
         self.order = 1
 
     def get_field(self, position: torch.Tensor) -> torch.Tensor:
@@ -77,11 +81,11 @@ class Dipole(FieldBlock):
         :return: Magnetic field vector.
         """
         local_pos = position - self.center_pos
-        zr = torch.abs(local_pos[2]) - 0.5 * self.length
-        if zr < 0:
-            return self.B0
-        else:
-            return self._fridge(self.B0, zr)
+        zr = torch.atleast_1d(torch.abs(local_pos[..., 2]) - 0.5 * self.length)
+        inside = torch.where(zr < 0, 1, 0)
+        outside = torch.abs(inside - 1)
+        return torch.squeeze(inside[:, None] * self.B0 + outside[:, None]
+                             * self._fridge(self.B0, zr))
 
 
 class Quadrupole(FieldBlock):
@@ -92,18 +96,20 @@ class Quadrupole(FieldBlock):
 
     def __init__(self, center_pos: torch.Tensor, length: float,
                  gradB: torch.Tensor, direction: Optional[torch.Tensor] = None,
-                 edge_length: float = 0.) -> None:
+                 edge_length: float = 0., device: Optional[torch.device] = None
+                 ) -> None:
         """
         :param center_pos: Central position of the magnet.
         :param length: Length of main part of field.
         :param gradB: Gradient of field strength.
         :param direction: Vector through central axis of magnet [0, 0, 1]
-            by defult
+            by default.
         :param edge_length: Length for field to fall by 10 %. 0 for hard edge or
             > 0 for soft edge with B0 / (1 + (z / d)**2)**2 dependence.
+        :param device: Device being used (e.g. cpu / gpu)
         """
-        super().__init__(center_pos, length, torch.tensor([gradB, -gradB, 0]),
-                         direction, edge_length)
+        super().__init__(center_pos, length, gradB, direction, edge_length,
+                         device)
 
     def get_field(self, position: torch.Tensor) -> torch.Tensor:
         """
@@ -112,11 +118,12 @@ class Quadrupole(FieldBlock):
         :return: Magnetic field vector.
         """
         local_pos = position - self.center_pos
-        zr = torch.abs(local_pos[2]) - 0.5 * self.length
-        if zr < 0:
-            return self.B0 * local_pos[[1, 0, 2]]
-        else:
-            return self._fridge(self.B0 * local_pos[[1, 0, 2]], zr)
+        zr = torch.atleast_1d(torch.abs(local_pos[..., 2]) - 0.5 * self.length)
+        inside = torch.where(zr < 0, 1, 0)
+        outside = torch.abs(inside - 1)
+        return torch.squeeze(
+            inside[:, None] * self.B0 * local_pos[[1, 0, 2]] + outside[:, None]
+            * self._fridge(self.B0 * local_pos[[1, 0, 2]], zr))
 
 
 class FieldContainer:

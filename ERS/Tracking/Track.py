@@ -29,10 +29,10 @@ class Track(torch.nn.Module):
         self.r = None      # Particle position
         self.p = None      # Particle momentum
         self.beta = None   # Velocity along particle path
-        self.gamma = None  # Loretnz factor og particle
+        self.gamma = None  # Loretnz factor of particle
 
-        self.bunch_time = None  # Bunch time samples
-        self.bunch_r = None  # bunch position
+        self.bunch_r = None     # Bunch position
+        self.bunch_p = None     # Bunch momentum
         self.bunch_beta = None  # Bunch beta
 
     def load_file(self, track_file: str) -> None:
@@ -98,7 +98,6 @@ class Track(torch.nn.Module):
             self.r = self.r.to(device)
             self.beta = self.beta.to(device)
         if self.bunch_r is not None:
-            self.bunch_time = self.bunch_time.to(device)
             self.bunch_r = self.bunch_r.to(device)
             self.bunch_beta = self.bunch_beta.to(device)
         return self
@@ -161,23 +160,87 @@ class Track(torch.nn.Module):
 
         self.beta = self.p / (c_light**2.0 + torch.sum(self.p * self.p,
                                                        dim=1)[:, None])**0.5
-
         # Transpose for field solver and switch device
         self.r = self.r.to(self.device).T
         self.beta = self.beta.to(self.device).T
         self.time = self.time.to(self.device)
+
+    def sim_bunch(self, field_container: FieldContainer, bunch_r: torch.Tensor,
+                  bunch_d: torch.Tensor, bunch_gamma: torch.Tensor,
+                  time: torch.Tensor) -> None:
+        """
+        Models the trajectory of a bunch of particle through a field defined
+        by field_container is cpp version (should be much-much faster)
+        :param field_container: Instance of class FieldContainer.
+        :param bunch_r: Initial position of tracks.
+        :param bunch_d: Initial direction of tracks.
+        :param bunch_gamma: Initial lorentz factor tracks.
+        :param time: Array of time samples.
+        """
+
+        # make sure all arrays are the same shape
+        samples = bunch_r.shape[0]
+
+        self.time = time.to(self.device)
+        self.bunch_r = torch.zeros((samples, self.time.shape[0], 3),
+                                   device=self.device)
+        self.bunch_p = torch.zeros((samples, self.time.shape[0], 3),
+                                   device=self.device)
+        detla_t = (time[1] - time[0])
+        delta_t_2 = detla_t / 2.
+        self.bunch_r[:, 0] = bunch_r
+        self.bunch_p[:, 0] = c_light * (bunch_gamma[:, None]**2. - 1.)**0.5\
+                             * bunch_d / torch.norm(bunch_d, dim=1)[:, None]
+
+        for i, t in enumerate(time[:-1]):
+            field = field_container.get_field(self.bunch_r[:, i].clone())
+            r_k1 = self._dr_dt(self.bunch_p[:, i].clone())
+            p_k1 = self._dp_dt(self.bunch_p[:, i].clone(), field)
+
+            field = field_container.get_field(self.bunch_r[:, i].clone() + r_k1
+                                              * delta_t_2)
+            r_k2 = self._dr_dt(self.bunch_p[:, i].clone() + p_k1 * delta_t_2)
+            p_k2 = self._dp_dt(self.bunch_p[:, i].clone() + p_k1 * delta_t_2,
+                               field)
+
+            field = field_container.get_field(self.bunch_r[:, i].clone() + r_k2
+                                              * delta_t_2)
+            r_k3 = self._dr_dt(self.bunch_p[:, i].clone() + p_k2 * delta_t_2)
+            p_k3 = self._dp_dt(self.bunch_p[:, i].clone() + p_k2 * delta_t_2,
+                               field)
+
+            field = field_container.get_field(self.bunch_r[:, i].clone() + r_k3
+                                              * detla_t)
+            r_k4 = self._dr_dt(self.bunch_p[:, i].clone() + p_k3 * detla_t)
+            p_k4 = self._dp_dt(self.bunch_p[:, i].clone() + p_k3 * detla_t,
+                               field)
+
+            self.bunch_r[:, i+1] = self.bunch_r[:, i].clone() + (detla_t / 6.) \
+                                   * (r_k1 + 2. * r_k2 + 2. * r_k3 + r_k4)
+            self.bunch_p[:, i+1] = self.bunch_p[:, i].clone() + (detla_t / 6.) \
+                                   * (p_k1 + 2. * p_k2 + 2. * p_k3 + p_k4)
+
+        self.bunch_beta = self.bunch_p / (c_light**2.0 + torch.sum(
+            self.bunch_p * self.bunch_p, dim=-1)[..., None])**0.5
+
+        self.r = self.bunch_r[0].T
+        self.beta = self.bunch_beta[0].T
+        self.gamma = bunch_gamma[0]
+        self.bunch_r = self.bunch_r.permute((0, 2, 1))
+        self.bunch_beta = self.bunch_beta.permute((0, 2, 1))
 
     @staticmethod
     def _dp_dt(p: torch.Tensor, field: torch.Tensor) -> torch.Tensor:
         """
         Rate of change of beta w.r.t time. We assume acceleration is always
         perpendicular to velocity which is true for just magnetic field
-        :param beta: Particle velocity
-        :param field: Magnetic field
-        :return: beta gradient
+        :param p: Particle momentum.
+        :param field: Magnetic field.
+        :return: Momentum gradient
         """
-        gamma = (1.0 + torch.sum(p * p) / c_light**2.0)**0.5
-        return -1 * torch.cross(p, field) / gamma
+        gamma = torch.atleast_1d(1.0 + torch.sum(p * p, dim=-1)
+                                 / c_light**2.0)**0.5
+        return -1 * torch.cross(p, field, dim=-1) / gamma[:, None]
 
     @staticmethod
     def _dr_dt(p: torch.Tensor) -> torch.Tensor:
@@ -186,8 +249,9 @@ class Track(torch.nn.Module):
         :param p: Particle momentum
         :return: position gradient
         """
-        gamma = (1.0 + torch.sum(p * p) / c_light**2.0)**0.5
-        return p / gamma
+        gamma = torch.atleast_1d(1.0 + torch.sum(p * p, dim=-1) /
+                                 c_light**2.0)**0.5
+        return p / gamma[:, None]
 
     def sim_single_c(self, field_container: FieldContainer, time: torch.Tensor,
                      r_0: torch.Tensor, d_0: torch.Tensor, gamma: float
@@ -226,13 +290,13 @@ class Track(torch.nn.Module):
                     gamma: float, bunch_params: torch.Tensor) -> None:
         """
         Models the trajectory of a single particle through a field defined
-        by field_container is cpp version (should be much-much faster)
+        by field_container with cpp version (should be much-much faster)
         :param n_part: Number of particles to simulate.
         :param field_container: Instance of class FieldContainer.
         :param time: Array of time samples.
         :param r_0: Initial position of central track.
         :param d_0: Initial direction of central track.
-        :param gamma: Initial lorentz factor of particle.
+        :param gamma: Initial lorentz factor of central track.
         :param bunch_params: torch.Tensor of 2nd order moments in the format:
          [sig_x, sig_x_xp, sig_xp, sig_x, sig_y_yp, sig_yp, sig_gamma]
         """
@@ -255,7 +319,6 @@ class Track(torch.nn.Module):
         time, r, beta = track.simulateBeam(n_part)
 
         # Transpose for field solver and switch device
-        self.bunch_time = torch.tensor(time).to(self.device)
         self.bunch_r = torch.tensor(r.transpose((0, 2, 1))).to(self.device)
         self.bunch_beta = torch.tensor(beta.transpose((0, 2, 1))).to(
             self.device)
