@@ -4,7 +4,7 @@ import torch.linalg
 import matplotlib.pyplot as plt
 from .cTrack import cTrack
 from .Magnets import FieldContainer
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 c_light = 0.29979245
 
@@ -50,7 +50,7 @@ class Track(torch.nn.Module):
         self.beta = torch.tensor(beta, device=self.device)
 
     def plot_track(self, axes: List[int], pos: bool = True
-                   ) -> tuple[plt.Figure, plt.Axes]:
+                   ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Plot interpolated track (Uses cubic spline)
         :param axes: Axes to plot (e. g z-x [2, 0])
@@ -67,7 +67,7 @@ class Track(torch.nn.Module):
         return fig, ax
 
     def plot_bunch(self, axes: List[int], n_part: int = -1, pos: bool = True
-                   ) -> tuple[plt.Figure, plt.Axes]:
+                   ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Plot single particle track
         :param axes: Axes to plot (e. g z-x [2, 0])

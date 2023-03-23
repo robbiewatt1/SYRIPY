@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Optional, TypeVar, List
+from typing import Optional, List, Tuple
 
 
 class Wavefront(torch.nn.Module):
@@ -217,7 +217,7 @@ class Wavefront(torch.nn.Module):
     def plot_intensity(self, log_plot: Optional[bool] = False,
                        ds_fact: int = 1, axes_lim: Optional[List[float]] = None,
                        lineout: Optional[List[int]] = None
-                       ) -> tuple[plt.Figure, plt.Axes]:
+                       ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Plots the intensity of the wavefront.
         :param log_plot: Make intensity axis logged
@@ -271,7 +271,7 @@ class Wavefront(torch.nn.Module):
     def plot_phase(self, dim: int = 0, ds_fact: int = 1,
                    axes_lim: Optional[List[float]] = None,
                    lineout: Optional[List[int]] = None
-                   ) -> tuple[plt.Figure, plt.Axes]:
+                   ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Plots the intensity of the wavefront.
         :param dim: Dimension to plot.

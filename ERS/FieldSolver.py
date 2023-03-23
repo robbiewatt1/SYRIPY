@@ -87,9 +87,9 @@ class FieldSolver(torch.nn.Module):
         r_norm = torch.linalg.norm(r_obs, dim=0)
         phase_samples = self.track.time[None, t_0:t_1] + r_norm / self.c_light
         phase_grad = torch.gradient(phase_samples, spacing=(
-            self.track.time[t_0:t_1],), dim=1)[0]
+            self.track.time[t_0:t_1],), edge_order=1, dim=1)[0]
         grad_inv_grad = torch.gradient(1. / phase_grad, spacing=(
-            self.track.time[t_0:t_1],), dim=1)[0]
+            self.track.time[t_0:t_1],), edge_order=1, dim=1)[0]
 
         # New samples are then evenly spaced over the cumulative distribution
         objective, _ = torch.max(torch.abs(grad_inv_grad), dim=0)
@@ -163,11 +163,12 @@ class FieldSolver(torch.nn.Module):
 
             # Calculate the phase function and gradient
             phase = self.track.time + r_norm / self.c_light
-            phase0 = phase[:, :, 0]
-            phase = phase - phase0[..., None]
+            phase_start = phase[:, :, 0]
+            phase_end = phase[:, :, -1]
+            phase = phase - phase_start[..., None]
             phase_grad = torch.unsqueeze(
                 torch.gradient(torch.squeeze(phase), spacing=(self.track.time,),
-                               dim=1)[0], dim=0)
+                               edge_order=2, dim=1)[0], dim=0)
 
             # Now calculate integrand samples
             int1 = (beta[:2, None, :] - n_dir) / (r_norm * phase_grad)
@@ -179,31 +180,46 @@ class FieldSolver(torch.nn.Module):
                          + self.filon_sin(phase, int2, self.wavefront.omega))
             imag_part = (self.filon_sin(phase, int1, self.wavefront.omega)
                          - self.filon_cos(phase, int2, self.wavefront.omega))
+            field = (real_part + 1j * imag_part) * torch.exp(
+                1j * self.wavefront.omega * phase_start)
 
             # Solve end points to inf
             if solve_ends:
-                real_part += (torch.cos(self.wavefront.omega * phase[..., 0])
-                              * int2[..., 0]
-                              - torch.cos(self.wavefront.omega * phase[..., -1])
-                              * int2[..., -1]
-                              + torch.sin(self.wavefront.omega * phase[..., 0])
-                              * int1[..., 0]
-                              - torch.sin(self.wavefront.omega * phase[..., -1])
-                              * int1[..., -1]) / self.wavefront.omega
-                imag_part += (torch.cos(self.wavefront.omega * phase[..., -1])
-                              * int1[..., -1]
-                              - torch.cos(self.wavefront.omega * phase[..., 0])
-                              * int1[..., 0]
-                              - torch.sin(self.wavefront.omega * phase[..., -1])
-                              * int2[..., -1]
-                              + torch.sin(self.wavefront.omega * phase[..., 0])
-                              * int2[..., 0]) / self.wavefront.omega
+                # First term in expansion is easy
+                field += (1j * (int1[..., -1] + 1j * int2[..., -1])
+                          * torch.exp(1j * self.wavefront.omega * phase_end)
+                          - 1j * (int1[..., 0] + 1j * int2[..., 0])
+                          * torch.exp(1j * self.wavefront.omega * phase_start))\
+                          / self.wavefront.omega
+
+                # Second order term is harder
+                rn_01 = r_norm[..., [0, -1]]
+                r0_01 = r_obs[..., [0, -1]]
+                b_01 = beta[:, None, [0, -1]]
+                n_01 = n_dir[..., [0, -1]]
+                r_grad = (-self.c_light * torch.sum(r0_01 * b_01, dim=0) /
+                          rn_01)
+                phase_grad2 = self.c_light**2. * torch.sum(b_01 * b_01, dim=0) \
+                    / rn_01 + self.c_light * torch.sum(r0_01 * b_01, dim=0) \
+                    * r_grad / rn_01**2.
+                n_grad = - self.c_light * b_01[:2] / rn_01 - r0_01[:2] * r_grad\
+                    / rn_01**2.
+                f_grad = (n_01 - b_01[:2]) * r_grad / rn_01**2. - n_grad \
+                    / rn_01 + (2. * n_01 * r_grad / rn_01 - n_grad) * 1j *\
+                    self.c_light / (rn_01**2. * self.wavefront.omega)
+
+                field += (((f_grad[..., 0] - (int1[..., 0] + 1j * int2[..., 0])
+                     * phase_grad2[..., 0]) / phase_grad[..., 0]**2.)
+                     * torch.exp(1j * self.wavefront.omega * phase_start)
+                     - (((f_grad[..., -1] - (int1[..., -1] + 1j * int2[..., -1])
+                     * phase_grad2[..., -1]) / phase_grad[..., -1]**2.)
+                     * torch.exp(1j * self.wavefront.omega * phase_end))) \
+                     / self.wavefront.omega**2.
+
             if blocks > 1:  # First method doesn't work with vmap so need this
-                self.wavefront.field[:, bi:bf] = (real_part + 1j * imag_part)\
-                                * torch.exp(1j * self.wavefront.omega * phase0)
+                self.wavefront.field[:, bi:bf] = field
             else:
-                self.wavefront.field = (real_part + 1j * imag_part)\
-                                * torch.exp(1j * self.wavefront.omega * phase0)
+                self.wavefront.field = field
         return self.wavefront
 
     def filon_sin(self, x_samples: torch.Tensor, f_samples: torch.Tensor,
