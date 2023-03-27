@@ -161,7 +161,8 @@ class FieldSolver(torch.nn.Module):
             r_norm = torch.linalg.norm(r_obs, dim=0, keepdim=True)
             n_dir = r_obs[:2] / r_norm
 
-            # Calculate the phase function and gradient
+            # Calculate the phase function and gradient (shift phase for
+            # numerical stable)
             phase = self.track.time + r_norm / self.c_light
             phase_start = phase[:, :, 0]
             phase_end = phase[:, :, -1]
@@ -171,50 +172,60 @@ class FieldSolver(torch.nn.Module):
                                edge_order=2, dim=1)[0], dim=0)
 
             # Now calculate integrand samples
-            int1 = (beta[:2, None, :] - n_dir) / (r_norm * phase_grad)
-            int2 = self.c_light * n_dir / (self.wavefront.omega * r_norm**2.0
-                                           * phase_grad)
+            int1 = (beta[:2, None, :] - n_dir) / r_norm
+            int2 = - self.c_light * n_dir / (self.wavefront.omega * r_norm**2.0)
 
             # Solve main part of integral
-            real_part = (self.filon_cos(phase, int1, self.wavefront.omega)
-                         + self.filon_sin(phase, int2, self.wavefront.omega))
-            imag_part = (self.filon_sin(phase, int1, self.wavefront.omega)
-                         - self.filon_cos(phase, int2, self.wavefront.omega))
+            real_part = self.filon_cos(
+                phase, int1 / phase_grad, self.wavefront.omega)\
+                - self.filon_sin(phase, int2 / phase_grad, self.wavefront.omega)
+            imag_part = self.filon_sin(
+                phase, int1 / phase_grad, self.wavefront.omega)\
+                + self.filon_cos(phase, int2 / phase_grad, self.wavefront.omega)
+
+            # Add initial phase part back in
             field = (real_part + 1j * imag_part) * torch.exp(
                 1j * self.wavefront.omega * phase_start)
 
             # Solve end points to inf
             if solve_ends:
-                # First term in expansion is easy
-                field += (1j * (int1[..., -1] + 1j * int2[..., -1])
-                          * torch.exp(1j * self.wavefront.omega * phase_end)
-                          - 1j * (int1[..., 0] + 1j * int2[..., 0])
-                          * torch.exp(1j * self.wavefront.omega * phase_start))\
-                          / self.wavefront.omega
-
-                # Second order term is harder
                 rn_01 = r_norm[..., [0, -1]]
                 r0_01 = r_obs[..., [0, -1]]
                 b_01 = beta[:, None, [0, -1]]
                 n_01 = n_dir[..., [0, -1]]
-                r_grad = (-self.c_light * torch.sum(r0_01 * b_01, dim=0) /
-                          rn_01)
-                phase_grad2 = self.c_light**2. * torch.sum(b_01 * b_01, dim=0) \
-                    / rn_01 + self.c_light * torch.sum(r0_01 * b_01, dim=0) \
-                    * r_grad / rn_01**2.
+                f_01 = int1[..., [0, -1]] + 1j * int2[..., [0, -1]]
+                b2_01 = torch.sum(b_01 * b_01, dim=0)
+                rb_01 = torch.sum(r0_01 * b_01, dim=0)
+
+                # Calculate gradients at the end points
+                r_grad = - self.c_light * rb_01 / rn_01
+                r_grad2 = self.c_light**2. * b2_01 / rn_01 + self.c_light\
+                    * rb_01 * r_grad / rn_01**2.
+                phase_grad = 1. + r_grad / self.c_light
+                phase_grad2 = r_grad2 / self.c_light
                 n_grad = - self.c_light * b_01[:2] / rn_01 - r0_01[:2] * r_grad\
                     / rn_01**2.
                 f_grad = (n_01 - b_01[:2]) * r_grad / rn_01**2. - n_grad \
-                    / rn_01 + (2. * n_01 * r_grad / rn_01 - n_grad) * 1j *\
-                    self.c_light / (rn_01**2. * self.wavefront.omega)
+                    / rn_01 + (2. * n_01 * r_grad / rn_01 - n_grad) * 1j\
+                    * self.c_light / (rn_01**2. * self.wavefront.omega)
 
-                field += (((f_grad[..., 0] - (int1[..., 0] + 1j * int2[..., 0])
-                     * phase_grad2[..., 0]) / phase_grad[..., 0]**2.)
-                     * torch.exp(1j * self.wavefront.omega * phase_start)
-                     - (((f_grad[..., -1] - (int1[..., -1] + 1j * int2[..., -1])
-                     * phase_grad2[..., -1]) / phase_grad[..., -1]**2.)
-                     * torch.exp(1j * self.wavefront.omega * phase_end))) \
-                     / self.wavefront.omega**2.
+                # First term in expansion is easy
+                field += (torch.exp(1j * self.wavefront.omega * phase_end)
+                          * f_01[..., -1] / phase_grad[..., -1]
+                          - torch.exp(1j * self.wavefront.omega * phase_start)
+                          * f_01[..., 0] / phase_grad[..., 0]) * 1j \
+                         / self.wavefront.omega
+
+                # Second order term is harder
+                field += (((f_grad[..., 0] * phase_grad[..., 0]
+                            - f_01[..., 0] * phase_grad2[..., 0])
+                           / phase_grad[..., 0]**3.)
+                          * torch.exp(1j * self.wavefront.omega * phase_start)
+                        - ((f_grad[..., -1] * phase_grad[..., -1]
+                            - f_01[..., -1] * phase_grad2[..., -1])
+                           / phase_grad[..., -1]**3.)
+                          * torch.exp(1j * self.wavefront.omega * phase_end)) \
+                    / self.wavefront.omega**2.
 
             if blocks > 1:  # First method doesn't work with vmap so need this
                 self.wavefront.field[:, bi:bf] = field
