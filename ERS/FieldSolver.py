@@ -42,7 +42,7 @@ class FieldSolver(torch.nn.Module):
 
     def set_dt(self, new_samples: int, t_start: Optional[float] = None,
                t_end: Optional[float] = None, n_sample: Optional[float] = None,
-               flat_power: float = 0.25, set_bunch: bool = False) -> None:
+               flat_power: float = 0.5, set_bunch: bool = False) -> None:
         """
         Sets the track samples based on large values of objective function
         obj = |grad(1/grad(g))|. Where g(t) is the phase function. Takes sample
@@ -92,8 +92,8 @@ class FieldSolver(torch.nn.Module):
             self.track.time[t_0:t_1],), edge_order=1, dim=1)[0]
 
         # New samples are then evenly spaced over the cumulative distribution
-        objective, _ = torch.max(torch.abs(grad_inv_grad), dim=0)
-        cumulative_obj = torch.cumsum(objective**flat_power, dim=0)
+        objective, _ = torch.max(torch.abs(grad_inv_grad)**flat_power, dim=0)
+        cumulative_obj = torch.cumsum(objective, dim=0)
         cumulative_obj = cumulative_obj / cumulative_obj[-1]
 
         # Now update all the samples
