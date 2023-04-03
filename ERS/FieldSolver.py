@@ -42,7 +42,7 @@ class FieldSolver(torch.nn.Module):
 
     def set_dt(self, new_samples: int, t_start: Optional[float] = None,
                t_end: Optional[float] = None, n_sample: Optional[float] = None,
-               flat_power: float = 0.5, set_bunch: bool = False) -> None:
+               flat_power: float = 0.25, set_bunch: bool = False) -> None:
         """
         Sets the track samples based on large values of objective function
         obj = |grad(1/grad(g))|. Where g(t) is the phase function. Takes sample
@@ -64,6 +64,12 @@ class FieldSolver(torch.nn.Module):
             raise Exception("Bunch trajectories have to be set before trying to"
                             " interpolate them. Use set_bunch=False or run"
                             " track.sim_bunch_c().")
+
+        if new_samples % 2 == 0:
+            print(f"Warning: Filon integrator is a Simpson's based method"
+                  f" requiring an odd number of time steps for high accuracy."
+                  f" Increasing new_samples to {new_samples + 1}")
+            new_samples += 1
 
         if n_sample is not None:
             sample_rate = int(self.wavefront.n_samples_xy[0] / n_sample)
@@ -164,12 +170,12 @@ class FieldSolver(torch.nn.Module):
             # Calculate the phase function and gradient (shift phase for
             # numerical stable)
             phase = self.track.time + r_norm / self.c_light
-            phase_start = phase[:, :, 0]
-            phase_end = phase[:, :, -1]
-            phase = phase - phase_start[..., None]
             phase_grad = torch.unsqueeze(
                 torch.gradient(torch.squeeze(phase), spacing=(self.track.time,),
                                edge_order=2, dim=1)[0], dim=0)
+            phase_start = phase[:, :, 0]
+            phase_end = phase[:, :, -1]
+            phase = phase - phase_start[..., None]
 
             # Now calculate integrand samples
             int1 = (beta[:2, None, :] - n_dir) / r_norm
@@ -372,6 +378,22 @@ class FieldSolver(torch.nn.Module):
                 - (x_low**2 * omega**2 - 2)
                 * torch.sin(omega * x_low) - 2 * omega * x_low
                 * torch.cos(omega * x_low)) / omega**3.0
+
+    @staticmethod
+    def cumulative_trapz(x: torch.Tensor, y: torch.Tensor):
+        """
+        Function to calculate the cumulative integral of y w.r.t x. Uses a first
+         order trapz method.
+        :param x: Input axis samples.
+        :param y: Integrand samples at location x.
+        :return: Cumulative integral of y starting at 0.
+        """
+        delta_x = torch.diff(x, dim=-1)
+        y_low = y[..., :-1]
+        y_high = y[..., 1:]
+        result = torch.zeros_like(y)
+        result[..., 1:] = torch.cumsum(delta_x * (y_high + y_low) / 2., dim=-1)
+        return result
 
 
 class CubicInterp:

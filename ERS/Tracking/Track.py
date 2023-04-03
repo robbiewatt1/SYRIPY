@@ -80,11 +80,11 @@ class Track(torch.nn.Module):
                             "plotted.")
         fig, ax = plt.subplots()
         if pos:
-            ax.plot(self.bunch_r[:n_part, axes[0], :].cpu().T,
-                    self.bunch_r[:n_part, axes[1], :].cpu().T)
+            ax.plot(self.bunch_r[:n_part, axes[0], :].cpu().detach().T,
+                    self.bunch_r[:n_part, axes[1], :].cpu().detach().T)
         else:
-            ax.plot(self.bunch_beta[:n_part, axes[0], :].cpu().T,
-                    self.bunch_beta[:n_part, axes[1], :].cpu().T)
+            ax.plot(self.bunch_beta[:n_part, axes[0], :].cpu().detach().T,
+                    self.bunch_beta[:n_part, axes[1], :].cpu().detach().T)
         return fig, ax
 
     def switch_device(self, device: torch.device) -> "Track":
@@ -121,18 +121,26 @@ class Track(torch.nn.Module):
             d_0.requires_grad = True
             gamma = torch.tensor(gamma, requires_grad=True)
 
-        self.time = time
+        if time.shape[0] % 2 == 0:
+            print(f"Warning: Filon integrator is a Simpson's based method"
+                  f" requiring an odd number of time steps for high accuracy."
+                  f" Increasing steps to {time.shape[0] + 1}")
+            self.time = torch.linspace(time[0], time[-1], time.shape[0] + 1,
+                                       device=time.device)
+        else:
+            self.time = time
+
         self.r = torch.zeros((self.time.shape[0], 3))
         self.p = torch.zeros((self.time.shape[0], 3))
         self.gamma = gamma
 
-        detla_t = (time[1] - time[0])
+        detla_t = (self.time[1] - self.time[0])
         delta_t_2 = detla_t / 2.
 
         self.r[0] = r_0
         self.p[0] = c_light * (gamma**2.0 - 1.)**0.5 * d_0 / torch.norm(d_0)
 
-        for i, t in enumerate(time[:-1]):
+        for i, t in enumerate(self.time[:-1]):
             field = field_container.get_field(self.r[i].clone())
 
             r_k1 = self._dr_dt(self.p[i].clone())
@@ -178,10 +186,17 @@ class Track(torch.nn.Module):
         :param time: Array of time samples.
         """
 
+        if time.shape[0] % 2 == 0:
+            print(f"Warning: Filon integrator is a Simpson's based method"
+                  f" requiring an odd number of time steps for high accuracy."
+                  f" Increasing steps to {time.shape[0] + 1}")
+            self.time = torch.linspace(time[0], time[-1], time.shape[0] + 1,
+                                       device=self.device)
+        else:
+            self.time = time.to(self.device)
+
         # make sure all arrays are the same shape
         samples = bunch_r.shape[0]
-
-        self.time = time.to(self.device)
         self.bunch_r = torch.zeros((samples, self.time.shape[0], 3),
                                    device=self.device)
         self.bunch_p = torch.zeros((samples, self.time.shape[0], 3),
@@ -223,9 +238,9 @@ class Track(torch.nn.Module):
         self.bunch_beta = self.bunch_p / (c_light**2.0 + torch.sum(
             self.bunch_p * self.bunch_p, dim=-1)[..., None])**0.5
 
-        self.r = self.bunch_r[0].T
-        self.beta = self.bunch_beta[0].T
-        self.gamma = bunch_gamma[0]
+        self.r = torch.mean(self.bunch_r, dim=0).T
+        self.beta = torch.mean(self.bunch_beta, dim=0).T
+        self.gamma = torch.mean(bunch_gamma, dim=0)
         self.bunch_r = self.bunch_r.permute((0, 2, 1))
         self.bunch_beta = self.bunch_beta.permute((0, 2, 1))
 
@@ -270,11 +285,19 @@ class Track(torch.nn.Module):
             raise Exception("Gradients can't be calculated using c tracker. Use"
                   " 'sim_single' instead.")
 
+        if time.shape[0] % 2 == 0:
+            print(f"Warning: Filon integrator is a Simpson's based method"
+                  f" requiring an odd number of time steps for high accuracy."
+                  f" Increasing steps to {time.shape[0] + 1}")
+            steps = time.shape[0] + 1
+        else:
+            steps = time.shape[0]
+
         r0_c = cTrack.ThreeVector(r_0[0], r_0[1], r_0[2])
         d0_c = cTrack.ThreeVector(d_0[0], d_0[1], d_0[2])
         field = field_container.gen_c_container()
         track = cTrack.Track()
-        track.setTime(time[0], time[-1], time.shape[0])
+        track.setTime(time[0], time[-1], steps)
         track.setCentralInit(r0_c, d0_c, gamma)
         track.setField(field)
         time, r, beta = track.simulateTrack()
@@ -304,6 +327,12 @@ class Track(torch.nn.Module):
         if self.requires_grad:
             raise Exception("Gradients can't be calculated using c tracker. Use"
                   " 'Track.sim_single' instead.")
+
+        if time.shape[0] % 2 == 0:
+            print(f"Warning: Filon integrator is a Simpson's based method"
+                  f" requiring an odd number of time steps for high accuracy."
+                  f" Increasing steps to {time.shape[0] + 1}")
+            time = torch.linspace(time[0], time[-1], time.shape[0] + 1)
 
         # First we simulate the central track
         self.sim_single_c(field_container, time, r_0, d_0, gamma)
