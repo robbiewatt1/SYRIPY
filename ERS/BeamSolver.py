@@ -115,7 +115,8 @@ class BeamSolver:
                                              (batch + 1) * self.batch_solve)
                     intensity_total += torch.mean(self.solver_func(batch_idx),
                                                   dim=0)
-                intensity_total = intensity_total[0] / self.batch_solve
+                intensity_total = intensity_total[0] / int(n_part
+                                                           / self.batch_solve)
             else:  # Not using batches
                 for index in range(0, n_part):
                     intensity_total += self.solver_func(index)

@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import torch
 from .Wavefront import Wavefront
 from .Tracking import Track
@@ -41,8 +42,9 @@ class FieldSolver(torch.nn.Module):
         return self
 
     def set_dt(self, new_samples: int, t_start: Optional[float] = None,
-               t_end: Optional[float] = None, n_sample: Optional[float] = None,
-               flat_power: float = 0.25, set_bunch: bool = False) -> None:
+               t_end: Optional[float] = None,
+               n_sample: Optional[float] = None, flat_power: float = 0.25,
+               set_bunch: bool = False) -> None:
         """
         Sets the track samples based on large values of objective function
         obj = |grad(1/grad(g))|. Where g(t) is the phase function. Takes sample
@@ -98,14 +100,16 @@ class FieldSolver(torch.nn.Module):
             self.track.time[t_0:t_1],), edge_order=1, dim=1)[0]
 
         # New samples are then evenly spaced over the cumulative distribution
-        objective, _ = torch.max(torch.abs(grad_inv_grad)**flat_power, dim=0)
-        cumulative_obj = torch.cumsum(objective, dim=0)
-        cumulative_obj = cumulative_obj / cumulative_obj[-1]
+        objective, _ = torch.max(torch.abs(grad_inv_grad), dim=0)
+        cumulative_obj = torch.cumsum(objective**flat_power, dim=0)
+        cumulative_obj = (cumulative_obj - cumulative_obj[0]) / \
+                         (cumulative_obj[-1] - cumulative_obj[0])
 
         # Now update all the samples
-        track_samples = torch.linspace(0, 1, new_samples, device=self.device)
-        self.track.time = CubicInterp(cumulative_obj,
-                                      self.track.time[t_0:t_1])(track_samples)
+        track_samples = torch.linspace(0.01, 0.99, new_samples,
+                                       device=self.device)
+        self.track.time = CubicInterp(cumulative_obj, self.track.time[t_0:t_1]
+                                      )(track_samples)
         self.track.r = CubicInterp(cumulative_obj.repeat(3, 1),
                            self.track.r[:, t_0:t_1])(track_samples.repeat(3, 1))
         self.track.beta = CubicInterp(cumulative_obj.repeat(3, 1),
@@ -172,7 +176,7 @@ class FieldSolver(torch.nn.Module):
             phase = self.track.time + r_norm / self.c_light
             phase_grad = torch.unsqueeze(
                 torch.gradient(torch.squeeze(phase), spacing=(self.track.time,),
-                               edge_order=2, dim=1)[0], dim=0)
+                               edge_order=1, dim=1)[0], dim=0)
             phase_start = phase[:, :, 0]
             phase_end = phase[:, :, -1]
             phase = phase - phase_start[..., None]
@@ -234,9 +238,9 @@ class FieldSolver(torch.nn.Module):
                     / self.wavefront.omega**2.
 
             if blocks > 1:  # First method doesn't work with vmap so need this
-                self.wavefront.field[:, bi:bf] = field
+                self.wavefront.field[:, bi:bf] = field * 1j
             else:
-                self.wavefront.field = field
+                self.wavefront.field = field * 1j
         return self.wavefront
 
     def filon_sin(self, x_samples: torch.Tensor, f_samples: torch.Tensor,
