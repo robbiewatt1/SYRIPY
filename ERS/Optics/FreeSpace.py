@@ -22,7 +22,7 @@ class FreeSpace(OpticalElement):
         self.z = z
         self.new_shape = new_shape
         self.new_bounds = new_bounds
-        self.c_light = 0.29979245
+        self.c_light = 0.299792458
 
         if self.new_shape and self.new_bounds:
             self.use_czt = True

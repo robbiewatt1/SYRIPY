@@ -11,7 +11,7 @@ class ThreeVector
 {
 /**
  * Simple Three vector class, implements basic linear algebra
- * such as dot / cross product 
+ * such as dot / cross product
 */
 
 public:

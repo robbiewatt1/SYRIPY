@@ -18,7 +18,7 @@ public:
      * @param fieldStrength: Field strength vector. B for dipole or db/dr for 
      *      quadrupole
      * @param length: Length of the magnet in the z dimension
-     * @param edgeLength: Length for the magneticx field to decay to 10% outside
+     * @param edgeLength: Length for the magnetic field to decay to 10% outside
      *      bulk of the magnet
      */
     FieldBlock(const ThreeVector& location, const ThreeVector& fieldStrength,
@@ -29,7 +29,7 @@ public:
     /**
      * Gets the magnetic field at a given position
      *
-     * @param position: Position to caclulate the field at.
+     * @param position: Position to calculate the field at.
      * @return Magnetic field three vector.
      */
     virtual ThreeVector getField(const ThreeVector& position) const = 0;
@@ -56,7 +56,7 @@ class FieldContainer
 {
 public:
     /*
-     * Defult constructor
+     * Default constructor
      */
     FieldContainer(){};
 
@@ -75,12 +75,12 @@ public:
     /**
      * Adds elements (dipole or quadrupole) to the field container.
      *
-     * @param order: Field order, 1 = Dipole, 2 = Qaud
+     * @param order: Field order, 1 = Dipole, 2 = Quad
      * @param location: Centre location of magnet.
      * @param fieldStrength: Field strength vector. B for dipole or db/dr for 
      *      quadrupole
      * @param length: Length of the magnet in the z dimension
-     * @param edgeLength: Length for the magneticx field to decay to 10% outside
+     * @param edgeLength: Length for the magnetic field to decay to 10% outside
      *      bulk of the magnet
      */
     void addElement(int order, const ThreeVector& location,
@@ -90,7 +90,7 @@ public:
     /**
      * Gets the total magnetic field at a given position
      *
-     * @param position: Position to caclulate the field at.
+     * @param position: Position to calculate the field at.
      * @return Magnetic field three vector.
      */
     ThreeVector getField(const ThreeVector& position) const;
@@ -101,29 +101,29 @@ private:
 };
 
 
-class Diploe: public FieldBlock
+class Dipole: public FieldBlock
 {
 public:
-    Diploe(){};
+    Dipole(){};
     /**
      * Constructor used to define dipole element.
      * 
      * @param location: Centre location of dipole.
      * @param fieldStrength: Field strength vector.
      * @param length: Length of the magnet in the z dimension
-     * @param edgeLength: Length for the magneticx field to decay to 10% outside
+     * @param edgeLength: Length for the magnetic field to decay to 10% outside
      *      bulk of the magnet
      */
-    Diploe(const ThreeVector& location, const ThreeVector& fieldStrength,
+    Dipole(const ThreeVector& location, const ThreeVector& fieldStrength,
         double length, double edgeLength);
 
-    ~Diploe(){};
+    ~Dipole(){};
 
     /**
      * Gets the magnetic field at a given position. Will be m_fieldStrength
      * inside the bulk of the magnet and m_fieldStrength * decay factor outside.
      *
-     * @param position: Position to caclulate the field at.
+     * @param position: Position to calculate the field at.
      * @return Dipole field three vector.
      */
     ThreeVector getField(const ThreeVector& position) const override;
@@ -141,7 +141,7 @@ public:
      * @param location: Centre location of quadrupole.
      * @param fieldStrength: Gradient field strength vector.
      * @param length: Length of the magnet in the z dimension
-     * @param edgeLength: Length for the magneticx field to decay to 10% outside
+     * @param edgeLength: Length for the magnetic field to decay to 10% outside
      *      bulk of the magnet
      */
     Quadrupole(const ThreeVector& location, const ThreeVector& fieldStrength,
@@ -153,7 +153,7 @@ public:
      * Gets the magnetic field at a given position. Will be m_fieldStrength
      * inside the bulk of the magnet and m_fieldStrength * decay factor outside.
      *
-     * @param position: Position to caclulate the field at.
+     * @param position: Position to calculate the field at.
      * @return Quadrupole field three vector.
      */
     ThreeVector getField(const ThreeVector& position) const override;

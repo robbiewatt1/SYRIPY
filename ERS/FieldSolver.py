@@ -1,34 +1,40 @@
-import matplotlib.pyplot as plt
 import torch
 from .Wavefront import Wavefront
 from .Tracking import Track
-from .Optics import OpticsContainer
-from typing import Optional, Union
-
-# TODO Change things so that the field is saved as a 2d array rather than 1
-# TODO Add checks to make sure track has already been solved
+from typing import Optional, Tuple
 
 
 class FieldSolver(torch.nn.Module):
     """
     Class which solves the Liénard–Wiechert field at a wavefront for a given
-    particle trajectory.
+    particle trajectory. Field is calculated assuming 1 nc of charge and SI
+    units apart from time in ns.
     """
 
-    def __init__(self, wavefront: Wavefront, track: Track) -> None:
+    def __init__(self, wavefront: Wavefront, track: Track,
+                 blocks: int = 1) -> None:
         """
         :param wavefront: Instance of Wavefront class
         :param track: Instance of Track class
+        :param blocks: Number of blocks to split calculation. Increasing this
+         will reduce memory but slow calculation.
         """
         super().__init__()
         self.wavefront = wavefront
         self.track = track
-        self.c_light = 0.29979245
+        self.blocks = blocks
+        self.c_light = 0.299792458
 
         # Check that wavefront / track device are both the same
         if track.device != wavefront.device:
             raise Exception("Track and wavefront are on different devices!")
         self.device = wavefront.device
+
+        # Check array divides evenly into blocks
+        if self.wavefront.coords.shape[1] % self.blocks != 0:
+            raise Exception("Observation array does not divide evenly into "
+                            f"blocks. {self.wavefront.coords.shape[1]} "
+                            f"observation points and {self.blocks} blocks.")
 
     @torch.jit.export
     def switch_device(self, device: torch.device) -> "FieldSolver":
@@ -43,8 +49,8 @@ class FieldSolver(torch.nn.Module):
 
     def set_dt(self, new_samples: int, t_start: Optional[float] = None,
                t_end: Optional[float] = None,
-               n_sample: Optional[float] = None, flat_power: float = 0.25,
-               set_bunch: bool = False) -> None:
+               n_sample: Optional[float] = None, flat_power: float = 0.25
+               ) -> None:
         """
         Sets the track samples based on large values of objective function
         obj = |grad(1/grad(g))|. Where g(t) is the phase function. Takes sample
@@ -54,18 +60,11 @@ class FieldSolver(torch.nn.Module):
          time of original track will be used.
         :param t_end: End time for integration. If t_end=None end time of
          original track will be used.
-        :param n_sample: Approximate number of test sample points in x.
+        :param n_sample: Approximate number of test sample points along x
+         dimension.
         :param flat_power: Power to which the objective function is raised. This
          increases the number of samples in the noisy bit.
-        :param set_bunch: If true then bunch track is also interpolated.
         """
-
-        # Check that bunch trajectories have already been set if trying to
-        # interpolate them
-        if set_bunch and self.track.bunch_r is None:
-            raise Exception("Bunch trajectories have to be set before trying to"
-                            " interpolate them. Use set_bunch=False or run"
-                            " track.sim_bunch_c().")
 
         if new_samples % 2 == 0:
             print(f"Warning: Filon integrator is a Simpson's based method"
@@ -84,29 +83,36 @@ class FieldSolver(torch.nn.Module):
         if t_end is None:
             t_end = self.track.time[-1]
 
-        t_0 = torch.argmin(torch.abs(self.track.time - t_start)).item()
-        t_1 = torch.argmin(torch.abs(self.track.time - t_end)).item()+1
+        t_0 = torch.argmin(torch.abs(self.track.time - t_start))
+        t_1 = torch.argmin(torch.abs(self.track.time - t_end)) + 1
+        self.track.time = self.track.time - self.track.time[t_0]
 
         # Calculate grad(1/ grad(phi)) at sample_x points.
         start_index = self.wavefront.n_samples_xy[1] // 2
         r_obs = self.wavefront.coords[
                 :, start_index::self.wavefront.n_samples_xy[1]*sample_rate,
                 None] - self.track.r[:, None, t_0:t_1]
-        r_norm = torch.linalg.norm(r_obs, dim=0)
-        phase_samples = self.track.time[None, t_0:t_1] + r_norm / self.c_light
-        phase_grad = torch.gradient(phase_samples, spacing=(
-            self.track.time[t_0:t_1],), edge_order=1, dim=1)[0]
+
+        rb_xy = torch.sum(r_obs[:2] * self.track.beta[:2, None, t_0:t_1], dim=0)
+        r2_xy = torch.sum(r_obs[:2] * r_obs[:2], dim=0)
+        b2_xy = torch.sum(self.track.beta[:2, None, t_0:t_1]
+                          * self.track.beta[:2, None, t_0:t_1], dim=0)
+        phase_grad = ((self.track.gamma**-2 + b2_xy) / 2.
+                      - (2. * r_obs[2] * rb_xy - r2_xy
+                         * self.track.beta[2, None, t_0:t_1])
+                      / (2 * r_obs[2] * r_obs[2] + r2_xy))
+
         grad_inv_grad = torch.gradient(1. / phase_grad, spacing=(
             self.track.time[t_0:t_1],), edge_order=1, dim=1)[0]
 
         # New samples are then evenly spaced over the cumulative distribution
-        objective, _ = torch.max(torch.abs(grad_inv_grad), dim=0)
-        cumulative_obj = torch.cumsum(objective**flat_power, dim=0)
+        objective, _ = torch.max(torch.abs(grad_inv_grad)**flat_power, dim=0)
+        cumulative_obj = torch.cumsum(objective, dim=0)
         cumulative_obj = (cumulative_obj - cumulative_obj[0]) / \
                          (cumulative_obj[-1] - cumulative_obj[0])
 
         # Now update all the samples
-        track_samples = torch.linspace(0.01, 0.99, new_samples,
+        track_samples = torch.linspace(0., 1, new_samples,
                                        device=self.device)
         self.track.time = CubicInterp(cumulative_obj, self.track.time[t_0:t_1]
                                       )(track_samples)
@@ -115,52 +121,82 @@ class FieldSolver(torch.nn.Module):
         self.track.beta = CubicInterp(cumulative_obj.repeat(3, 1),
                         self.track.beta[:, t_0:t_1])(track_samples.repeat(3, 1))
 
-        if set_bunch:
+        # If bunch track exists then also down sample
+        if self.track.bunch_r.shape[0] != 0:
             n = self.track.bunch_r.shape[:2]
             self.track.bunch_r = CubicInterp(cumulative_obj.repeat(*n, 1),
                   self.track.bunch_r[..., t_0:t_1])(track_samples.repeat(*n, 1))
             self.track.bunch_beta = CubicInterp(cumulative_obj.repeat(*n, 1),
                self.track.bunch_beta[..., t_0:t_1])(track_samples.repeat(*n, 1))
 
+    # We need create 2 solver functions as vmap can't be complied
     @torch.jit.export
-    def solve_field(self, blocks: int = 1, solve_ends: bool = True,
-                    reset: bool = True,
-                    bunch_index: Union[int, torch.Tensor] = None
+    def solve_field(self, bunch_index: int = -1, solve_ends: bool = True
                     ) -> Wavefront:
         """
-        Main function to solve the radiation field at the wavefront.
-        Interaction limits must be within time array of track
-        :param blocks: Number of blocks to split calculation. Increasing this
-         will reduce memory but slow calculation.
-        :param solve_ends: If true the integration is extended to +/- inf using
-         an asymptotic expansion.
-        :param reset: If true, the wavefront is reset before the calculation.
-        :param bunch_index: Index of bunch track. If none then central track is
-         used.
+        Main callable function to solve the field for either a single particle
+         or a sample from a bunch.
+        :param bunch_index: Index of particle to solve. If we are just solving a
+         single central trajectory then bunch_index=-1 which is the default.
+        :param solve_ends: If true then we use a first order asymptotic
+         expansion to solve the ends of the integral.
+        :return: The wavefront with calculated field array.
         """
-        if reset:
-            self.wavefront.reset()
 
-        # Check array divides evenly into blocks
-        if self.wavefront.coords.shape[1] % blocks != 0:
-            raise Exception("Observation array does not divide evenly into "
-                            f"blocks. {self.wavefront.coords.shape[1]} "
-                            f"observation points and {blocks} blocks.")
-
-        # Check if we are sampling from bunch track or central track
-        if bunch_index is None:
+        if bunch_index == -1:
+            if self.track.r.shape[0] == 0:
+                raise Exception(
+                    "Cannot calculate particle field because track hasn't "
+                    "been simulated yet. Please simulate track with "
+                    "track.sim_single_c() or track.sim_single() before trying "
+                    "to solve field.")
             r = self.track.r
             beta = self.track.beta
-        elif isinstance(bunch_index, int):
+            gamma = self.track.gamma
+        else:
+            if self.track.bunch_r.shape[0] == 0:
+                raise Exception(
+                    "Cannot calculate bunch sample field because bunch tracks "
+                    "haven't been simulated yet. Please simulate bunch track "
+                    "with  track.sim_bunch_c() or track.sim_bunch() before "
+                    "trying to solve field.")
             r = self.track.bunch_r[bunch_index]
             beta = self.track.bunch_beta[bunch_index]
-        else:  # Need to do this fix to avoid using .item()
-            r = self.track.bunch_r[bunch_index[None]][0]
-            beta = self.track.bunch_beta[bunch_index[None]][0]
+            gamma = self.track.bunch_gamma[bunch_index]
+        return self._solve_field(r, beta, gamma, solve_ends)
+
+    @torch.jit.export
+    def solve_field_vmap(self, bunch_index: torch.Tensor,
+                         solve_ends: bool = True) -> torch.Tensor:
+        """
+        Main callable function to solve the field if we are using torch's vmap
+         method to small simulations in batch mode.
+        :param bunch_index: Batch tensor of indices to be solved.
+        :param solve_ends: If true then we use a first order asymptotic
+         expansion to solve the ends of the integral.
+        :return: The wavefront with calculated field array.
+        """
+        r = self.track.bunch_r[bunch_index[None]][0]
+        beta = self.track.bunch_beta[bunch_index[None]][0]
+        gamma = self.track.bunch_gamma[bunch_index[None]][0]
+        return self._solve_field(r, beta, gamma, solve_ends).get_intensity()
+
+    @torch.jit.export
+    def _solve_field(self, r: torch.Tensor, beta: torch.Tensor,
+                     gamma: torch.Tensor, solve_ends: bool = True) -> Wavefront:
+        """
+        Function which solves the integral. However, this shouldn't be called
+        directly as it requires track information as an argument.
+        :param solve_ends: If true then we use a first order asymptotic
+         expansion to solve the ends of the integral.
+        """
+
+        # Reset the wavefront
+        self.wavefront.reset()
 
         # Loop blocks and perform calculation
-        block_size = int(self.wavefront.coords.shape[1] / blocks)
-        for i in range(blocks):
+        block_size = self.wavefront.coords.shape[1] // self.blocks
+        for i in range(self.blocks):
 
             # start and end index of block
             bi = block_size * i
@@ -168,220 +204,113 @@ class FieldSolver(torch.nn.Module):
 
             # Calculate observation points
             r_obs = self.wavefront.coords[:, bi:bf, None] - r[:, None, :]
-            r_norm = torch.linalg.norm(r_obs, dim=0, keepdim=True)
-            n_dir = r_obs[:2] / r_norm
 
-            # Calculate the phase function and gradient (shift phase for
-            # numerical stable)
-            phase = self.track.time + r_norm / self.c_light
-            phase_grad = torch.unsqueeze(
-                torch.gradient(torch.squeeze(phase), spacing=(self.track.time,),
-                               edge_order=1, dim=1)[0], dim=0)
-            phase_start = phase[:, :, 0]
-            phase_end = phase[:, :, -1]
-            phase = phase - phase_start[..., None]
-
+            # Calculate the gradient of the phase
+            rb_xy = torch.sum(r_obs[:2] * beta[:2, None, :], dim=0)
+            r2_xy = torch.sum(r_obs[:2] * r_obs[:2], dim=0)
+            b2_xy = torch.sum(beta[:2] * beta[:2], dim=0)
+            phase_grad = ((gamma**-2 + b2_xy) / 2. - (
+                    2. * r_obs[2] * rb_xy - r2_xy * beta[2, None, :])
+                          / (2 * r_obs[2] * r_obs[2] + r2_xy))[None]
+            phase, delta_phase = self.cumulative_trapz(self.track.time,
+                                                       phase_grad)
             # Now calculate integrand samples
+            r_norm = (2. * r_obs[2]**2. + r2_xy) / (2. * r_obs[2])
+            n_dir = r_obs[:2] / r_norm
             int1 = (beta[:2, None, :] - n_dir) / r_norm
             int2 = - self.c_light * n_dir / (self.wavefront.omega * r_norm**2.0)
 
             # Solve main part of integral
-            real_part = self.filon_cos(
-                phase, int1 / phase_grad, self.wavefront.omega)\
-                - self.filon_sin(phase, int2 / phase_grad, self.wavefront.omega)
-            imag_part = self.filon_sin(
-                phase, int1 / phase_grad, self.wavefront.omega)\
-                + self.filon_cos(phase, int2 / phase_grad, self.wavefront.omega)
+            imag1, real1 = self.filon_method(
+                phase, delta_phase, int1 / phase_grad, self.wavefront.omega)
+            real2, imag2 = self.filon_method(
+                phase, delta_phase, int2 / phase_grad, self.wavefront.omega)
 
-            # Add initial phase part back in
-            field = (real_part + 1j * imag_part) * torch.exp(
-                1j * self.wavefront.omega * phase_start)
+            field = (real1 - real2 + 1j * (imag1 + imag2))
 
             # Solve end points to inf
             if solve_ends:
-                rn_01 = r_norm[..., [0, -1]]
-                r0_01 = r_obs[..., [0, -1]]
-                b_01 = beta[:, None, [0, -1]]
-                n_01 = n_dir[..., [0, -1]]
-                f_01 = int1[..., [0, -1]] + 1j * int2[..., [0, -1]]
-                b2_01 = torch.sum(b_01 * b_01, dim=0)
-                rb_01 = torch.sum(r0_01 * b_01, dim=0)
-
-                # Calculate gradients at the end points
-                r_grad = - self.c_light * rb_01 / rn_01
-                r_grad2 = self.c_light**2. * b2_01 / rn_01 + self.c_light\
-                    * rb_01 * r_grad / rn_01**2.
-                phase_grad = 1. + r_grad / self.c_light
-                phase_grad2 = r_grad2 / self.c_light
-                n_grad = - self.c_light * b_01[:2] / rn_01 - r0_01[:2] * r_grad\
-                    / rn_01**2.
-                f_grad = (n_01 - b_01[:2]) * r_grad / rn_01**2. - n_grad \
-                    / rn_01 + (2. * n_01 * r_grad / rn_01 - n_grad) * 1j\
-                    * self.c_light / (rn_01**2. * self.wavefront.omega)
-
-                # First term in expansion is easy
-                field += (torch.exp(1j * self.wavefront.omega * phase_end)
-                          * f_01[..., -1] / phase_grad[..., -1]
-                          - torch.exp(1j * self.wavefront.omega * phase_start)
-                          * f_01[..., 0] / phase_grad[..., 0]) * 1j \
+                f_01 = int1[:, :, [0, -1]] + 1j * int2[:, :, [0, -1]]
+                field += (torch.exp(1j * self.wavefront.omega * phase[:, :, -1])
+                        * f_01[:, :, -1] / phase_grad[:, :, -1]
+                        - torch.exp(1j * self.wavefront.omega * phase[:, :, 0])
+                          * f_01[:, :, 0] / phase_grad[:, :, 0]) * 1j \
                          / self.wavefront.omega
 
-                # Second order term is harder
-                field += (((f_grad[..., 0] * phase_grad[..., 0]
-                            - f_01[..., 0] * phase_grad2[..., 0])
-                           / phase_grad[..., 0]**3.)
-                          * torch.exp(1j * self.wavefront.omega * phase_start)
-                        - ((f_grad[..., -1] * phase_grad[..., -1]
-                            - f_01[..., -1] * phase_grad2[..., -1])
-                           / phase_grad[..., -1]**3.)
-                          * torch.exp(1j * self.wavefront.omega * phase_end)) \
-                    / self.wavefront.omega**2.
+            # Add start phase term
+            if i == 0:
+                r2_xy_c = r2_xy[0, 0]
+            phase_0 = r2_xy[:, 0] / (2. * r_obs[2, :, 0])
+            field = field * torch.exp(1j * phase_0 * self.wavefront.omega
+                              / self.c_light) * self.wavefront.omega
 
-            if blocks > 1:  # First method doesn't work with vmap so need this
-                self.wavefront.field[:, bi:bf] = field * 1j
+            # First method doesn't work with vmap so need this
+            if self.blocks > 1:
+                self.wavefront.field[:, bi:bf] = field
             else:
-                self.wavefront.field = field * 1j
+                self.wavefront.field = field
         return self.wavefront
 
-    def filon_sin(self, x_samples: torch.Tensor, f_samples: torch.Tensor,
-                  omega: float) -> torch.Tensor:
+    @staticmethod
+    def filon_method(x_samples: torch.Tensor, delta_x: torch.Tensor,
+                     f_samples: torch.Tensor, omega: float
+                     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Filon based method for integrating function multiplied by a rapidly
         oscillating sine wave. I = int[f(x) sin(omega x)], omega >> 1. Uses a
         quadratic approximation for f(x), allowing I to be solved analytically.
         :param x_samples: Sample points of integration.
-        :param f_samples: Samples of non-oscillating function
+        :param delta_x: Difference between samples.
+        :param f_samples: Samples of non-oscillating function.
         :param omega: Oscillation frequency.
         :return: Integration result.
         """
-        x0 = x_samples[..., :-2:2]
-        x1 = x_samples[..., 1:-1:2]
-        x2 = x_samples[..., 2::2]
-        j0 = self.sin_moment(omega, x0, x2)
-        j1 = self.x_sin_moment(omega, x0, x2)
-        j2 = self.x2_sin_moment(omega, x0, x2)
-        f0 = f_samples[..., :-2:2]
-        f1 = f_samples[..., 1:-1:2]
-        f2 = f_samples[..., 2::2]
-        w0 = (x1 * x2 * j0 - x1 * j1 - x2 * j1 + j2) \
-            / ((x0 - x1) * (x0 - x2))
-        w1 = (x0 * x2 * j0 - x0 * j1 - x2 * j1 + j2) \
-            / ((x1 - x0) * (x1 - x2))
-        w2 = (x0 * (j1 - x1 * j0) + x1 * j1 - j2) \
-            / ((x0 - x2) * (x2 - x1))
-        return torch.sum(w0 * f0 + w1 * f1 + w2 * f2, dim=-1)
+        sin_x1 = torch.sin(omega * x_samples[..., 1:-1:2])
+        cos_x1 = torch.cos(omega * x_samples[..., 1:-1:2])
+        sin_x1x0 = torch.sin(omega * delta_x[..., ::2])
+        cos_x1x0 = torch.cos(omega * delta_x[..., ::2])
+        sin_x2x1 = torch.sin(omega * delta_x[..., 1::2])
+        cos_x2x1 = torch.cos(omega * delta_x[..., 1::2])
+        x1x0 = omega * delta_x[..., ::2]
+        x2x1 = omega * delta_x[..., 1::2]
+        x2x0 = omega * (delta_x[..., 1::2] + delta_x[..., :-1:2])
 
-    def filon_cos(self, x_samples: torch.Tensor, f_samples: torch.Tensor,
-                  omega: float) -> torch.Tensor:
-        """
-        Filon based method for integrating function multiplied by a rapidly
-        oscillating cosine wave. I = int[f(x) cos(omega x)], omega >> 1. Uses a
-        quadratic approximation for f(x), allowing I to be solved analytically.
-        :param x_samples: Sample points of integration.
-        :param f_samples: Samples of non-oscillating function
-        :param omega: Oscillation frequency.
-        :return: Integration result.
-        """
-        x0 = x_samples[..., :-2:2]
-        x1 = x_samples[..., 1:-1:2]
-        x2 = x_samples[..., 2::2]
-        j0 = self.cos_moment(omega, x0, x2)
-        j1 = self.x_cos_moment(omega, x0, x2)
-        j2 = self.x2_cos_moment(omega, x0, x2)
-        f0 = f_samples[..., :-2:2]
-        f1 = f_samples[..., 1:-1:2]
-        f2 = f_samples[..., 2::2]
-        w0 = (x1 * x2 * j0 - x1 * j1 - x2 * j1 + j2) \
-            / ((x0 - x1) * (x0 - x2))
-        w1 = (x0 * x2 * j0 - x0 * j1 - x2 * j1 + j2) \
-            / ((x1 - x0) * (x1 - x2))
-        w2 = (x0 * (j1 - x1 * j0) + x1 * j1 - j2) \
-            / ((x0 - x2) * (x2 - x1))
-        return torch.sum(w0 * f0 + w1 * f1 + w2 * f2, dim=-1)
-
-    @staticmethod
-    def sin_moment(omega: float, x_low: torch.Tensor, x_high: torch.Tensor
-                   ) -> torch.Tensor:
-        """
-        :param omega: Oscillation frequency
-        :param x_low: Lower integration limit
-        :param x_high Upper integration limit
-        :return: Zeroth moment [sin(omega x)]
-        """
-        return (torch.cos(omega * x_low)
-                - torch.cos(omega * x_high)) / omega
-
-    @staticmethod
-    def x_sin_moment(omega: float, x_low: torch.Tensor, x_high: torch.Tensor
-                     ) -> torch.Tensor:
-        """
-        :param omega: Oscillation frequency
-        :param x_low: Lower integration limit
-        :param x_high Upper integration limit
-        :return: First moment [x sin(omega x)]
-        """
-        return (torch.sin(omega * x_high) - x_high * omega
-                * torch.cos(omega * x_high)
-                - torch.sin(omega * x_low) + x_low * omega
-                * torch.cos(omega * x_low)) / omega**2
-
-    @staticmethod
-    def x2_sin_moment(omega: float, x_low: torch.Tensor, x_high: torch.Tensor
-                      ) -> torch.Tensor:
-        """
-        :param omega: Oscillation frequency
-        :param x_low: Lower integration limit
-        :param x_high Upper integration limit
-        :return: Second moment [x^2 sin(omega x)]
-        """
-        return ((2 - x_high**2 * omega**2)
-                * torch.cos(omega * x_high) + 2 * omega * x_high
-                * torch.sin(omega * x_high)
-                - (2 - x_low**2 * omega**2)
-                * torch.cos(omega * x_low) - 2 * omega * x_low
-                * torch.sin(omega * x_low)) / omega**3.0
-
-    @staticmethod
-    def cos_moment(omega: float, x_low: torch.Tensor, x_high: torch.Tensor
-                   ) -> torch.Tensor:
-        """
-        :param omega: Oscillation frequency
-        :param x_low: Lower integration limit
-        :param x_high Upper integration limit
-        :return: Zeroth moment [cos(omega x)]
-        """
-        return (torch.sin(omega * x_high)
-                - torch.sin(omega * x_low)) / omega
-
-    @staticmethod
-    def x_cos_moment(omega: float, x_low: torch.Tensor, x_high: torch.Tensor
-                     ) -> torch.Tensor:
-        """
-        :param omega: Oscillation frequency
-        :param x_low: Lower integration limit
-        :param x_high Upper integration limit
-        :return: First moment [x cos(omega x)]
-        """
-        return (torch.cos(omega * x_high) + x_high * omega
-                * torch.sin(omega * x_high)
-                - torch.cos(omega * x_low) - x_low * omega
-                * torch.sin(omega * x_low)) / omega**2
-
-    @staticmethod
-    def x2_cos_moment(omega: float, x_low: torch.Tensor, x_high: torch.Tensor
-                      ) -> torch.Tensor:
-        """
-        :param omega: Oscillation frequency
-        :param x_low: Lower integration limit
-        :param x_high Upper integration limit
-        :return: Second moment [x^2 cos(omega x)]
-        """
-        return ((x_high**2 * omega**2 - 2)
-                * torch.sin(omega * x_high) + 2 * omega * x_high
-                * torch.cos(omega * x_high)
-                - (x_low**2 * omega**2 - 2)
-                * torch.sin(omega * x_low) - 2 * omega * x_low
-                * torch.cos(omega * x_low)) / omega**3.0
+        w0_sin = (sin_x1 * ((x2x0 * x1x0 - 2.) * sin_x1x0 + (x1x0 + x2x0)
+                            * cos_x1x0 - 2. * sin_x2x1 + x2x1 * cos_x2x1)
+                  + cos_x1 * ((x2x0 * x1x0 - 2.) * cos_x1x0 - (x1x0 + x2x0)
+                              * sin_x1x0 + 2. * cos_x2x1 + x2x1 * sin_x2x1)
+                  ) / (omega * x2x0 * x1x0)
+        w1_sin = (sin_x1 * (x2x0 * (cos_x2x1 + cos_x1x0)
+                            - 2. * (sin_x2x1 + sin_x1x0))
+                  + cos_x1 * (x2x0 * (sin_x2x1 - sin_x1x0)
+                              + 2. * (cos_x2x1 - cos_x1x0))
+                  ) / (omega * x1x0 * -x2x1)
+        w2_sin = (sin_x1 * ((2. - x2x0 * x2x1) * sin_x2x1 - (x2x1 + x2x0)
+                            * cos_x2x1 + 2. * sin_x1x0 - x1x0 * cos_x1x0)
+                  + cos_x1 * ((x2x0 * x2x1 - 2.) * cos_x2x1 - (x2x1 + x2x0)
+                              * sin_x2x1 + 2. * cos_x1x0 + x1x0 * sin_x1x0)
+                  ) / (omega * -x2x0 * x2x1)
+        w0_cos = (sin_x1 * (cos_x1x0 * (2. - x2x0 * x1x0) + sin_x1x0
+                            * (x1x0 + x2x0) - 2. * cos_x2x1 - sin_x2x1 * x2x1)
+                  + cos_x1 * (sin_x1x0 * (x2x0 * x1x0 - 2.) + cos_x1x0
+                              * (x1x0 + x2x0) - 2. * sin_x2x1 + cos_x2x1 * x2x1)
+                  ) / (omega * x1x0 * x2x0)
+        w1_cos = (sin_x1 * (x2x0 * (sin_x1x0 - sin_x2x1)
+                            + 2 * (-cos_x2x1 + cos_x1x0))
+                  + cos_x1 * (x2x0 * (cos_x1x0 + cos_x2x1)
+                              - 2 * (sin_x2x1 + sin_x1x0))
+                  ) / (omega * -x1x0 * x2x1)
+        w2_cos = (sin_x1 * ((x2x0 * x2x1 - 2.) * cos_x2x1 - (x2x1 + x2x0)
+                            * sin_x2x1 + 2. * cos_x1x0 + x1x0 * sin_x1x0)
+                  + cos_x1 * ((x2x0 * x2x1 - 2.) * sin_x2x1 + (x2x1 + x2x0)
+                              * cos_x2x1 - 2. * sin_x1x0 + x1x0 * cos_x1x0)
+                  ) / (omega * x2x0 * x2x1)
+        return (torch.sum(w0_sin * f_samples[..., :-2:2]
+                          + w1_sin * f_samples[..., 1:-1:2]
+                          + w2_sin * f_samples[..., 2::2], dim=-1),
+                torch.sum(w0_cos * f_samples[..., :-2:2]
+                          + w1_cos * f_samples[..., 1:-1:2]
+                          + w2_cos * f_samples[..., 2::2], dim=-1))
 
     @staticmethod
     def cumulative_trapz(x: torch.Tensor, y: torch.Tensor):
@@ -393,11 +322,10 @@ class FieldSolver(torch.nn.Module):
         :return: Cumulative integral of y starting at 0.
         """
         delta_x = torch.diff(x, dim=-1)
-        y_low = y[..., :-1]
-        y_high = y[..., 1:]
+        delta_y = delta_x * (y[..., 1:] + y[..., :-1]) / 2.
         result = torch.zeros_like(y)
-        result[..., 1:] = torch.cumsum(delta_x * (y_high + y_low) / 2., dim=-1)
-        return result
+        result[..., 1:] = torch.cumsum(delta_y, dim=-1)
+        return result, delta_y
 
 
 class CubicInterp:

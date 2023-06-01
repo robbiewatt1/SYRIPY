@@ -253,14 +253,14 @@ class Wavefront(torch.nn.Module):
                     self.x_axis.cpu().detach().numpy()[::ds_fact],
                     self.y_axis.cpu().detach().numpy()[::ds_fact],
                     np.log10(intensity[::ds_fact, ::ds_fact]),
-                    cmap="jet", shading='auto')
+                    cmap="jet", shading="gouraud")
                 fig.colorbar(pcol)
             else:
                 pcol = ax.pcolormesh(
                     self.x_axis.cpu().detach().numpy()[::ds_fact],
                     self.y_axis.cpu().detach().numpy()[::ds_fact],
                     intensity[::ds_fact, ::ds_fact],
-                    cmap="jet", shading='auto')
+                    cmap="jet", shading="gouraud")
                 fig.colorbar(pcol)
 
         if axes_lim:
@@ -298,7 +298,7 @@ class Wavefront(torch.nn.Module):
                 self.x_axis.cpu().detach().numpy()[::ds_fact],
                 self.y_axis.cpu().detach().numpy()[::ds_fact],
                 phase.cpu().detach().numpy()[::ds_fact, ::ds_fact],
-                cmap="jet", shading='auto')
+                cmap="jet", shading="gouraud")
             fig.colorbar(pcol)
 
         if axes_lim:

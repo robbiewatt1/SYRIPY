@@ -6,7 +6,7 @@ from .cTrack import cTrack
 from .Magnets import FieldContainer
 from typing import Optional, List, Tuple
 
-c_light = 0.29979245
+c_light = 0.299792458
 
 
 class Track(torch.nn.Module):
@@ -25,29 +25,37 @@ class Track(torch.nn.Module):
         self.device = device
         self.requires_grad = requires_grad
 
-        self.time = None   # Proper time along particle path
-        self.r = None      # Particle position
-        self.p = None      # Particle momentum
-        self.beta = None   # Velocity along particle path
-        self.gamma = None  # Loretnz factor of particle
+        # Here we define all the track parameters. We initialise them as empty
+        # tensors so torch jit doesn't get mad
+        self.time = torch.tensor([])   # Proper time along particle path
+        self.r = torch.tensor([])      # Particle position
+        self.p = torch.tensor([])      # Particle momentum
+        self.beta = torch.tensor([])   # Velocity along particle path
+        self.gamma = torch.tensor([])  # Lorentz factor of particle
 
-        self.bunch_r = None     # Bunch position
-        self.bunch_p = None     # Bunch momentum
-        self.bunch_beta = None  # Bunch beta
+        self.bunch_r = torch.tensor([])      # Bunch position
+        self.bunch_p = torch.tensor([])      # Bunch momentum
+        self.bunch_beta = torch.tensor([])   # Bunch beta
+        self.bunch_gamma = torch.tensor([])  # Bunch lorentz factor
 
     def load_file(self, track_file: str) -> None:
         """
         Loads track from external simulation
         :param track_file: Numpy array containing track information. In format:
-         [time, r, beta]
+         [time, r, beta, gamma]
         """
         track = np.load(track_file)
         time = track[0]
         r = track[1:4]
         beta = track[4:]
-        self.time = torch.tensor(time, device=self.device)
-        self.r = torch.tensor(r, device=self.device)
-        self.beta = torch.tensor(beta, device=self.device)
+
+        self.time = torch.from_numpy(time).type(torch.get_default_dtype()
+                                                ).to(self.device)
+        self.r = torch.from_numpy(r).type(torch.get_default_dtype()
+                                          ).to(self.device)
+        self.beta = torch.from_numpy(beta).type(torch.get_default_dtype()
+                                                ).to(self.device)
+        self.gamma = (1 - torch.sum(self.beta[:, 0]**2.))**-0.5
 
     def plot_track(self, axes: List[int], pos: bool = True
                    ) -> Tuple[plt.Figure, plt.Axes]:
@@ -75,7 +83,7 @@ class Track(torch.nn.Module):
         :param pos: Bool if true then plot position else plot beta
         :return: fig, ax
         """
-        if self.bunch_r is None:
+        if self.bunch_r.shape[0] == 0:
             raise Exception("No bunch has been simulated so nothing can be "
                             "plotted.")
         fig, ax = plt.subplots()
@@ -93,17 +101,18 @@ class Track(torch.nn.Module):
         :param device: Device to switch to.
         """
         self.device = device
-        if self.r is not None:
+        if self.r.shape[0] != 0:
             self.time = self.time.to(device)
             self.r = self.r.to(device)
             self.beta = self.beta.to(device)
-        if self.bunch_r is not None:
+        if self.bunch_r.shape[0] != 0:
             self.bunch_r = self.bunch_r.to(device)
             self.bunch_beta = self.bunch_beta.to(device)
         return self
 
     def sim_single(self, field_container: FieldContainer, time: torch.Tensor,
-                   r_0: torch.Tensor, d_0: torch.Tensor, gamma: float) -> None:
+                   r_0: torch.Tensor, d_0: torch.Tensor, gamma: torch.Tensor
+                   ) -> None:
         """
         Models the trajectory of a single particle through a field defined
         by field_container
@@ -303,10 +312,14 @@ class Track(torch.nn.Module):
         time, r, beta = track.simulateTrack()
 
         # Transpose for field solver and switch device
-        self.time = torch.tensor(time).to(self.device)
-        self.r = torch.tensor(r).to(self.device).T
-        self.beta = torch.tensor(beta).to(self.device).T
-        self.gamma = gamma
+        self.time = torch.from_numpy(time).type(torch.get_default_dtype()
+                                                ).to(self.device)
+        self.r = torch.from_numpy(r).type(torch.get_default_dtype()
+                                          ).to(self.device).T
+        self.beta = torch.from_numpy(beta).type(torch.get_default_dtype()
+                                                ).to(self.device).T
+        self.gamma = torch.tensor([gamma], dtype=torch.get_default_dtype()
+                                  ).to(self.device)
 
     def sim_bunch_c(self, n_part: int, field_container: FieldContainer,
                     time: torch.Tensor, r_0: torch.Tensor, d_0: torch.Tensor,
@@ -348,7 +361,9 @@ class Track(torch.nn.Module):
         time, r, beta = track.simulateBeam(n_part)
 
         # Transpose for field solver and switch device
-        self.bunch_r = torch.tensor(r.transpose((0, 2, 1))).to(self.device)
-        self.bunch_beta = torch.tensor(beta.transpose((0, 2, 1))).to(
-            self.device)
-        self.gamma = gamma
+        self.bunch_r = torch.from_numpy(r.transpose((0, 2, 1))).type(
+            torch.get_default_dtype()).to(self.device)
+        self.bunch_beta = torch.from_numpy(beta.transpose((0, 2, 1))).type(
+            torch.get_default_dtype()).to(self.device)
+        self.bunch_gamma = 1. / (1. - torch.sum(self.bunch_beta[:, :, 0]**2.,
+                                                dim=1))**0.5

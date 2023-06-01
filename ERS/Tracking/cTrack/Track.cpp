@@ -203,17 +203,17 @@ void Track::updateTrack(std::vector<ThreeVector>& position,
         posK4 = pushPosition(momentum[index] + momK3 * m_dt);
         momK4 = pushMomentum(momentum[index] + momK3 * m_dt, field);
 
-        position[index+1] = position[index] + (m_dt / 6.) * (posK1 + 2.0 * posK2
-                                                    + 2.0 * posK3 + posK4);
-        momentum[index+1] = momentum[index] + (m_dt / 6.) * (momK1 + 2.0 * momK2
-                                                    + 2.0 * momK3 + momK4);
+        position[index+1] = position[index] + (m_dt / 6.) * (posK1 + 2. * posK2
+                                                    + 2. * posK3 + posK4);
+        momentum[index+1] = momentum[index] + (m_dt / 6.) * (momK1 + 2. * momK2
+                                                    + 2. * momK3 + momK4);
         beta[index+1] = momentum[index+1] / std::sqrt(c_light * c_light
             + momentum[index+1].Mag2());
 }
 
 ThreeVector Track::pushPosition(const ThreeVector &momentum) const
 {
-    double gamma  = std::sqrt(1.0 + momentum.Mag2() / (c_light * c_light));
+    double gamma  = std::sqrt(1. + momentum.Mag2() / (c_light * c_light));
     return momentum / gamma;
 }
 

@@ -25,7 +25,7 @@ void FieldContainer::addElement(int order, const ThreeVector& location,
     //FieldBlock element;
     if (order == 1) // dipole
     {
-        Diploe* element = new Diploe(location, fieldStrength, length,
+        Dipole* element = new Dipole(location, fieldStrength, length,
             edgeLength);
         m_fieldContainer.push_back(element);
     } else if (order == 2)
@@ -36,7 +36,7 @@ void FieldContainer::addElement(int order, const ThreeVector& location,
     } else
     {
         std::cerr << "Error: Field order must be 1 for dipole or 2 for " 
-                     "quadrupole. Instead recieved: " << order << std::endl;
+                     "quadrupole. Instead received: " << order << std::endl;
         return;
     }
     
@@ -56,13 +56,13 @@ ThreeVector FieldContainer::getField(const ThreeVector& position) const
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
 */
 
-Diploe::Diploe(const ThreeVector& location, const ThreeVector& fieldStrength,
+Dipole::Dipole(const ThreeVector& location, const ThreeVector& fieldStrength,
         double length, double edgeLength):
 FieldBlock(location, fieldStrength,length, edgeLength)
 {
 }
 
-ThreeVector Diploe::getField(const ThreeVector& position) const
+ThreeVector Dipole::getField(const ThreeVector& position) const
 {
     ThreeVector local_pos = position - m_location;
     double zr = std::abs(local_pos[2]) - 0.5 * m_length;
@@ -91,7 +91,7 @@ ThreeVector Quadrupole::getField(const ThreeVector& position) const
     ThreeVector local_pos = position - m_location;
     ThreeVector s_pos = ThreeVector(local_pos[1], local_pos[0], local_pos[2]);
     double zr = std::abs(local_pos[2]) - 0.5 * m_length;
-    if (zr < 0)
+    if (zr < 0.)
     {
         return m_fieldStrength * s_pos;
     } else
