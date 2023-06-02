@@ -2,11 +2,8 @@ import torch
 from .cTrack import cTrack
 from typing import Optional, List
 
-me = 9.1093837e-31
-qe = 1.60217663e-19
 
-
-class FieldBlock:
+class FieldBlock(torch.nn.Module):
     """
     Base class of magnetic fields.
     """
@@ -25,9 +22,14 @@ class FieldBlock:
             > 0 for soft edge with B0 / (1 + (z / d)**2)**2 dependence.
         :param device: Device being used (e.g. cpu / gpu)
         """
+        super().__init__()
+
+        me = 9.1093837e-31
+        qe = 1.60217663e-19
+        self.B0 = (B0 / (me / (qe * 1.e-9))).to(device)
+
         self.center_pos = center_pos.to(device)
         self.length = length
-        self.B0 = (B0 / (me / (qe * 1.e-9))).to(device)
         self.direction = direction  # Not yet implemented
         self.edge_length = edge_length
         self.edge_scaled = edge_length / (10.**0.5 - 1)**0.5
@@ -39,7 +41,7 @@ class FieldBlock:
         :param position: Position of particle
         :return: Magnetic field vector.
         """
-        pass
+        return self.B0
 
     def _fridge(self, b: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         """
@@ -126,7 +128,7 @@ class Quadrupole(FieldBlock):
             * self._fridge(self.B0 * local_pos[[1, 0, 2]], zr))
 
 
-class FieldContainer:
+class FieldContainer(torch.nn.Module):
     """
     class containing a list of all defined magnetic elements. Will return the
     field for any given location.
@@ -136,7 +138,8 @@ class FieldContainer:
         """
         :param field_array: A list containing all the defined elements.
         """
-        self.field_array = field_array
+        super().__init__()
+        self.field_array = torch.nn.ModuleList(field_array)
 
     def get_field(self, position: torch.Tensor) -> torch.Tensor:
         """
@@ -149,6 +152,7 @@ class FieldContainer:
             field += element.get_field(position)
         return field
 
+    @torch.jit.unused
     def gen_c_container(self) -> cTrack.FieldContainer:
         """
         Converts the python field container class to the c-type

@@ -167,7 +167,7 @@ class FieldSolver(torch.nn.Module):
 
     @torch.jit.export
     def solve_field_vmap(self, bunch_index: torch.Tensor,
-                         solve_ends: bool = True) -> torch.Tensor:
+                         solve_ends: bool = True) -> Wavefront:
         """
         Main callable function to solve the field if we are using torch's vmap
          method to small simulations in batch mode.
@@ -179,7 +179,7 @@ class FieldSolver(torch.nn.Module):
         r = self.track.bunch_r[bunch_index[None]][0]
         beta = self.track.bunch_beta[bunch_index[None]][0]
         gamma = self.track.bunch_gamma[bunch_index[None]][0]
-        return self._solve_field(r, beta, gamma, solve_ends).get_intensity()
+        return self._solve_field(r, beta, gamma, solve_ends)
 
     @torch.jit.export
     def _solve_field(self, r: torch.Tensor, beta: torch.Tensor,
@@ -236,13 +236,10 @@ class FieldSolver(torch.nn.Module):
                         - torch.exp(1j * self.wavefront.omega * phase[:, :, 0])
                           * f_01[:, :, 0] / phase_grad[:, :, 0]) * 1j \
                          / self.wavefront.omega
-
-            # Add start phase term
-            if i == 0:
-                r2_xy_c = r2_xy[0, 0]
-            phase_0 = r2_xy[:, 0] / (2. * r_obs[2, :, 0])
-            field = field * torch.exp(1j * phase_0 * self.wavefront.omega
-                              / self.c_light) * self.wavefront.omega
+            # Add in intial phase part
+            field = field * torch.exp(1j * r2_xy[:, 0] / (2. * r_obs[2, :, 0])
+                                      * self.wavefront.omega / self.c_light
+                                      ) * self.wavefront.omega
 
             # First method doesn't work with vmap so need this
             if self.blocks > 1:
