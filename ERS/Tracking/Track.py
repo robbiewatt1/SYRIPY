@@ -135,8 +135,8 @@ class Track(torch.nn.Module):
         else:
             self.time = time
 
-        self.r = torch.zeros((self.time.shape[0], 3))
-        self.p = torch.zeros((self.time.shape[0], 3))
+        self.r = torch.zeros((self.time.shape[0], 3), device=self.device)
+        self.p = torch.zeros((self.time.shape[0], 3), device=self.device)
         self.gamma = gamma
 
         detla_t = (self.time[1] - self.time[0])
@@ -167,10 +167,10 @@ class Track(torch.nn.Module):
             r_k4 = self._dr_dt(self.p[i].clone() + p_k3 * detla_t)
             p_k4 = self._dp_dt(self.p[i].clone() + p_k3 * detla_t, field)
 
-            self.r[i+1] = self.r[i].clone() + (detla_t / 6.) \
-                          * (r_k1 + 2. * r_k2 + 2. * r_k3 + r_k4)
-            self.p[i+1] = self.p[i].clone() + (detla_t / 6.)\
-                          * (p_k1 + 2. * p_k2 + 2. * p_k3 + p_k4)
+            self.r[i+1] = torch.squeeze(self.r[i].clone() + (detla_t / 6.) \
+                          * (r_k1 + 2. * r_k2 + 2. * r_k3 + r_k4))
+            self.p[i+1] = torch.squeeze(self.p[i].clone() + (detla_t / 6.) \
+                          * (p_k1 + 2. * p_k2 + 2. * p_k3 + p_k4))
 
         self.beta = self.p / (self.c_light**2.0
                               + torch.sum(self.p * self.p, dim=1)[:, None])**0.5
