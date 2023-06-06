@@ -94,6 +94,7 @@ class Track(torch.nn.Module):
                     self.bunch_beta[:n_part, axes[1], :].cpu().detach().T)
         return fig, ax
 
+    @torch.jit.export
     def switch_device(self, device: torch.device) -> "Track":
         """
         Changes the device that the class data is stored on.
@@ -249,6 +250,7 @@ class Track(torch.nn.Module):
         self.gamma = torch.mean(bunch_gamma, dim=0)
         self.bunch_r = self.bunch_r.permute((0, 2, 1))
         self.bunch_beta = self.bunch_beta.permute((0, 2, 1))
+        self.bunch_gamma = bunch_gamma.to(self.device)
 
     def _dp_dt(self, p: torch.Tensor, field: torch.Tensor) -> torch.Tensor:
         """
