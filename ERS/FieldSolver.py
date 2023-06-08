@@ -47,6 +47,7 @@ class FieldSolver(torch.nn.Module):
         self.wavefront.switch_device(device)
         return self
 
+    @torch.jit.ignore
     def set_dt(self, new_samples: int, t_start: Optional[float] = None,
                t_end: Optional[float] = None,
                n_sample: Optional[float] = None, flat_power: float = 0.25
