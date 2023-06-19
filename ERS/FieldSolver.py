@@ -50,8 +50,8 @@ class FieldSolver(torch.nn.Module):
     @torch.jit.ignore
     def set_dt(self, new_samples: int, t_start: Optional[float] = None,
                t_end: Optional[float] = None,
-               n_sample: Optional[float] = None, flat_power: float = 0.25
-               ) -> None:
+               n_sample: Optional[float] = None, flat_power: float = 0.25,
+               mode: str = "cubic") -> None:
         """
         Sets the track samples based on large values of objective function
         obj = |grad(1/grad(g))|. Where g(t) is the phase function. Takes sample
@@ -65,6 +65,7 @@ class FieldSolver(torch.nn.Module):
          dimension.
         :param flat_power: Power to which the objective function is raised. This
          increases the number of samples in the noisy bit.
+        :param: mode: Interpolation mode. Can be cubic or nn (nearest neighbor).
         """
 
         if new_samples % 2 == 0:
@@ -72,6 +73,10 @@ class FieldSolver(torch.nn.Module):
                   f" requiring an odd number of time steps for high accuracy."
                   f" Increasing new_samples to {new_samples + 1}")
             new_samples += 1
+
+        if mode.lower() not in ["cubic", "nn"]:
+            raise Exception(f"Unknown interpolation mode {mode}. Please use "
+                            f"either \"cubic\" or \"nn\".")
 
         if n_sample is not None:
             sample_rate = int(self.wavefront.n_samples_xy[0] / n_sample)
@@ -113,24 +118,47 @@ class FieldSolver(torch.nn.Module):
                          (cumulative_obj[-1] - cumulative_obj[0])
 
         # Now update all the samples
-        track_samples = torch.linspace(0., 1, new_samples,
-                                       device=self.device)
-        self.track.time = CubicInterp(cumulative_obj, self.track.time[t_0:t_1]
-                                      )(track_samples)
-        self.track.r = CubicInterp(cumulative_obj.repeat(3, 1),
-                           self.track.r[:, t_0:t_1])(track_samples.repeat(3, 1))
-        self.track.beta = CubicInterp(cumulative_obj.repeat(3, 1),
-                        self.track.beta[:, t_0:t_1])(track_samples.repeat(3, 1))
+        track_samples = torch.linspace(0., 1, new_samples, device=self.device)
+        if mode == "cubic":  # Use cubic interpolation
+            self.track.time = CubicInterp(
+                cumulative_obj, self.track.time[t_0:t_1])(track_samples)
+            self.track.r = CubicInterp(
+                cumulative_obj.repeat(3, 1), self.track.r[:, t_0:t_1]
+                )(track_samples.repeat(3, 1))
+            self.track.beta = CubicInterp(
+                cumulative_obj.repeat(3, 1), self.track.beta[:, t_0:t_1]
+                )(track_samples.repeat(3, 1))
 
-        # If bunch track exists then also down sample
-        if self.track.bunch_r.shape[0] != 0:
-            n = self.track.bunch_r.shape[:2]
-            self.track.bunch_r = CubicInterp(cumulative_obj.repeat(*n, 1),
-                  self.track.bunch_r[..., t_0:t_1])(track_samples.repeat(*n, 1))
-            self.track.bunch_beta = CubicInterp(cumulative_obj.repeat(*n, 1),
-               self.track.bunch_beta[..., t_0:t_1])(track_samples.repeat(*n, 1))
+            # If bunch track exists then also down sample
+            if self.track.bunch_r.shape[0] != 0:
+                n = self.track.bunch_r.shape[:2]
+                self.track.bunch_r = CubicInterp(
+                  cumulative_obj.repeat(*n, 1), self.track.bunch_r[..., t_0:t_1]
+                  )(track_samples.repeat(*n, 1))
+                self.track.bunch_beta = CubicInterp(
+                    cumulative_obj.repeat(*n, 1),
+                    self.track.bunch_beta[..., t_0:t_1]
+                    )(track_samples.repeat(*n, 1))
 
-    # We need create 2 solver functions as vmap can't be complied
+        else:  # Use nearest neighbour interpolation
+            sample_index = torch.unique(torch.abs(
+                cumulative_obj[:, None] - track_samples[None]).argmin(dim=0))
+
+            # We need an odd number of samples to avoid strange things happening
+            if len(sample_index) % 2 == 0:
+                sample_index = sample_index[:-1]
+
+            self.track.time = self.track.time[t_0:t_1][sample_index]
+            self.track.r = self.track.r[:, t_0:t_1][:, sample_index]
+            self.track.beta = self.track.beta[:, t_0:t_1][:, sample_index]
+
+            # If bunch track exists then also down sample
+            if self.track.bunch_r.shape[0] != 0:
+                self.track.bunch_r = self.track.bunch_r[..., t_0:t_1][
+                    ..., sample_index]
+                self.track.bunch_beta = self.track.bunch_beta[..., t_0:t_1][
+                    ..., sample_index]
+
     @torch.jit.export
     def solve_field(self, bunch_index: int = -1, solve_ends: bool = True
                     ) -> Wavefront:
@@ -164,7 +192,7 @@ class FieldSolver(torch.nn.Module):
             r = self.track.bunch_r[bunch_index]
             beta = self.track.bunch_beta[bunch_index]
             gamma = self.track.bunch_gamma[bunch_index]
-        return self._solve_field(r, beta, gamma, solve_ends)
+        return self._solve_field(self.track.time, r, beta, gamma, solve_ends)
 
     @torch.jit.export
     def solve_field_vmap(self, bunch_index: torch.Tensor,
@@ -180,14 +208,22 @@ class FieldSolver(torch.nn.Module):
         r = self.track.bunch_r[bunch_index[None]][0]
         beta = self.track.bunch_beta[bunch_index[None]][0]
         gamma = self.track.bunch_gamma[bunch_index[None]][0]
-        return self._solve_field(r, beta, gamma, solve_ends)
+        return self._solve_field(self.track.time, r, beta, gamma, solve_ends)
+
+    def forward(self, time: torch.Tensor,  r: torch.Tensor, beta: torch.Tensor,
+                     gamma: torch.Tensor, solve_ends: bool = True) -> Wavefront:
+        return self._solve_field(time, r, beta, gamma, solve_ends)
 
     @torch.jit.export
-    def _solve_field(self, r: torch.Tensor, beta: torch.Tensor,
+    def _solve_field(self, time: torch.Tensor, r: torch.Tensor, beta: torch.Tensor,
                      gamma: torch.Tensor, solve_ends: bool = True) -> Wavefront:
         """
         Function which solves the integral. However, this shouldn't be called
         directly as it requires track information as an argument.
+        :param time: Time samples along track.
+        :param r: Position samples along track.
+        :param beta: Velocity samples along track.
+        :param gamma: Particle lorentz factor.
         :param solve_ends: If true then we use a first order asymptotic
          expansion to solve the ends of the integral.
         """
@@ -213,8 +249,7 @@ class FieldSolver(torch.nn.Module):
             phase_grad = ((gamma**-2 + b2_xy) / 2. - (
                     2. * r_obs[2] * rb_xy - r2_xy * beta[2, None, :])
                           / (2 * r_obs[2] * r_obs[2] + r2_xy))[None]
-            phase, delta_phase = self.cumulative_trapz(self.track.time,
-                                                       phase_grad)
+            phase, delta_phase = self.cumulative_trapz(time, phase_grad)
             # Now calculate integrand samples
             r_norm = (2. * r_obs[2]**2. + r2_xy) / (2. * r_obs[2])
             n_dir = r_obs[:2] / r_norm

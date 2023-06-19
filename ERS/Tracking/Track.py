@@ -140,38 +140,37 @@ class Track(torch.nn.Module):
         self.p = torch.zeros((self.time.shape[0], 3), device=self.device)
         self.gamma = gamma
 
-        detla_t = (self.time[1] - self.time[0])
-        delta_t_2 = detla_t / 2.
-
         self.r[0] = r_0
         self.p[0] = self.c_light * (gamma**2.0 - 1.)**0.5 * d_0\
                     / torch.norm(d_0)
 
         for i, t in enumerate(self.time[:-1]):
-            field = self.field_container.get_field(self.r[i].clone())
+            detla_t = (self.time[i+1] - self.time[i])
+            delta_t_2 = detla_t / 2.
 
+            field = self.field_container.get_field(self.r[i].clone())
             r_k1 = self._dr_dt(self.p[i].clone())
             p_k1 = self._dp_dt(self.p[i].clone(), field)
 
             field = self.field_container.get_field(self.r[i].clone() + r_k1
-                                              * delta_t_2)
+                                                   * delta_t_2)
             r_k2 = self._dr_dt(self.p[i].clone() + p_k1 * delta_t_2)
             p_k2 = self._dp_dt(self.p[i].clone() + p_k1 * delta_t_2, field)
 
             field = self.field_container.get_field(self.r[i].clone() + r_k2
-                                              * delta_t_2)
+                                                   * delta_t_2)
             r_k3 = self._dr_dt(self.p[i].clone() + p_k2 * delta_t_2)
             p_k3 = self._dp_dt(self.p[i].clone() + p_k2 * delta_t_2, field)
 
             field = self.field_container.get_field(self.r[i].clone() + r_k3
-                                              * detla_t)
+                                                   * detla_t)
             r_k4 = self._dr_dt(self.p[i].clone() + p_k3 * detla_t)
             p_k4 = self._dp_dt(self.p[i].clone() + p_k3 * detla_t, field)
 
-            self.r[i+1] = torch.squeeze(self.r[i].clone() + (detla_t / 6.) \
-                          * (r_k1 + 2. * r_k2 + 2. * r_k3 + r_k4))
-            self.p[i+1] = torch.squeeze(self.p[i].clone() + (detla_t / 6.) \
-                          * (p_k1 + 2. * p_k2 + 2. * p_k3 + p_k4))
+            self.r[i+1] = torch.squeeze(self.r[i].clone() + (detla_t / 6.)
+                                        * (r_k1 + 2. * r_k2 + 2. * r_k3 + r_k4))
+            self.p[i+1] = torch.squeeze(self.p[i].clone() + (detla_t / 6.)
+                                        * (p_k1 + 2. * p_k2 + 2. * p_k3 + p_k4))
 
         self.beta = self.p / (self.c_light**2.0
                               + torch.sum(self.p * self.p, dim=1)[:, None])**0.5
@@ -208,13 +207,14 @@ class Track(torch.nn.Module):
                                    device=self.device)
         self.bunch_p = torch.zeros((samples, self.time.shape[0], 3),
                                    device=self.device)
-        detla_t = (time[1] - time[0])
-        delta_t_2 = detla_t / 2.
         self.bunch_r[:, 0] = bunch_r
         self.bunch_p[:, 0] = self.c_light * (bunch_gamma[:, None]**2. - 1)**0.5\
                              * bunch_d / torch.norm(bunch_d, dim=1)[:, None]
 
         for i, t in enumerate(time[:-1]):
+            detla_t = (time[i+1] - time[i])
+            delta_t_2 = detla_t / 2.
+
             field = self.field_container.get_field(self.bunch_r[:, i].clone())
             r_k1 = self._dr_dt(self.bunch_p[:, i].clone())
             p_k1 = self._dp_dt(self.bunch_p[:, i].clone(), field)
