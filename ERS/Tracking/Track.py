@@ -56,6 +56,7 @@ class Track(torch.nn.Module):
                                                 ).to(self.device)
         self.gamma = (1 - torch.sum(self.beta[:, 0]**2.))**-0.5
 
+    @torch.jit.ignore
     def plot_track(self, axes: List[int], pos: bool = True
                    ) -> Tuple[plt.Figure, plt.Axes]:
         """
@@ -73,6 +74,7 @@ class Track(torch.nn.Module):
                     self.beta[axes[1], :].cpu().detach().numpy())
         return fig, ax
 
+    @torch.jit.ignore
     def plot_bunch(self, axes: List[int], n_part: int = -1, pos: bool = True
                    ) -> Tuple[plt.Figure, plt.Axes]:
         """
@@ -105,9 +107,11 @@ class Track(torch.nn.Module):
             self.time = self.time.to(device)
             self.r = self.r.to(device)
             self.beta = self.beta.to(device)
+            self.gamma = self.gamma.to(device)
         if self.bunch_r.shape[0] != 0:
             self.bunch_r = self.bunch_r.to(device)
             self.bunch_beta = self.bunch_beta.to(device)
+            self.bunch_gamma = self.bunch_gamma.to(device)
         return self
 
     @torch.jit.export
@@ -274,7 +278,7 @@ class Track(torch.nn.Module):
                                  self.c_light**2.0)**0.5
         return p / gamma[:, None]
 
-    @torch.jit.unused
+    @torch.jit.ignore
     def sim_single_c(self, time: torch.Tensor, r_0: torch.Tensor,
                      d_0: torch.Tensor, gamma: float) -> None:
         """
@@ -316,7 +320,7 @@ class Track(torch.nn.Module):
         self.gamma = torch.tensor([gamma], dtype=torch.get_default_dtype()
                                   ).to(self.device)
 
-    @torch.jit.unused
+    @torch.jit.ignore
     def sim_bunch_c(self, n_part: int, time: torch.Tensor, r_0: torch.Tensor,
                     d_0: torch.Tensor, gamma: float, bunch_params: torch.Tensor
                     ) -> None:
