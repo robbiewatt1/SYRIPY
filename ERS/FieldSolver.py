@@ -78,6 +78,9 @@ class FieldSolver(torch.nn.Module):
             raise Exception(f"Unknown interpolation mode {mode}. Please use "
                             f"either \"cubic\" or \"nn\".")
 
+        # Reset the wavefront
+        self.wavefront.reset()
+
         if n_sample is not None:
             sample_rate = int(self.wavefront.n_samples_xy[0] / n_sample)
         else:
