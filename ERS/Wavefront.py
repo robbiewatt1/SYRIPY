@@ -211,8 +211,10 @@ class Wavefront(torch.nn.Module):
         Calculates and returns the intensity of the wavefront.
         :return: Intensity array
         """
-        return torch.sum(torch.abs(self.field)**2.0, dim=0).reshape(
-            self.n_samples_xy[0], self.n_samples_xy[1])
+        # Can't use abs with jit so need to do this with .real
+        return torch.sum(self.field.real**2.0 + self.field.imag**2.0,
+                         dim=0).reshape(self.n_samples_xy[0],
+                                        self.n_samples_xy[1])
 
     def plot_intensity(self, log_plot: Optional[bool] = False,
                        ds_fact: int = 1, axes_lim: Optional[List[float]] = None,
