@@ -334,6 +334,88 @@ class FraunhoferProp(FreeSpace):
         wavefront.z = wavefront.z + self.z
         wavefront.field = new_field.flatten(1, 2)
 
+
+class TestProp(FreeSpace):
+
+    def __init__(self, z: float, pad: Optional[int] = None,
+                 new_shape: Optional[List[int]] = None,
+                 new_bounds: Optional[List[float]] = None,
+                 fourier_shape: Optional[List[int]] = None,
+                 fourier_bounds: Optional[List[float]] = None) -> None:
+        """
+        :param z: Propagation distance.
+        :param pad: Int setting padding amount. Default is none
+        :param new_shape: The shape of the output wavefront if using
+         CZT transform [nx, ny]
+        :param new_bounds: The bounds of the output wavefront if using
+        CZT transform [x_min, x_max, y_min, y_max].
+        :param fourier_shape: The shape of the fourier plane if using the CZT
+         transform for first transform.
+        param fourier_bounds: The bounds of the fourier plane if using the CZT
+         transform for first transform.
+        """
+        super().__init__(z, pad, new_shape, new_bounds)
+        self.fourier_shape = fourier_shape
+        self.fourier_bounds = fourier_bounds
+
+    def propagate(self, wavefront: Wavefront) -> None:
+        """
+        Propagates wavefront. Aperture is applied first to avoid complex
+        wave-vector. If new_shape / new_bounds is set then a czt is used
+        rather than a fourier transform. CZT does not need padding.
+        :param wavefront: Wavefront to be propagated.
+        """
+        super().propagate(wavefront)
+
+        wave_k = wavefront.omega / self.c_light
+        lambd = 2.0 * torch.pi / wave_k
+        field = wavefront.field.reshape(2, wavefront.n_samples_xy[0],
+                                        wavefront.n_samples_xy[1])
+        field_scaled = field / torch.exp(
+            1j * wave_k / (2 * wavefront.curv_r) * (wavefront.x_array**2.0
+                                                    + wavefront.y_array**2.0))
+        import matplotlib.pyplot as plt
+        print(wavefront.curv_r)
+        index = field_scaled.shape[1] // 2
+        fig, ax = plt.subplots()
+        ax.plot(torch.angle(field_scaled[0, index]).cpu())
+        fig, ax = plt.subplots()
+        ax.plot(torch.angle(field_scaled[0, :, index]).cpu())
+        plt.show()
+
+        # Do convolution on reduced part
+        field_scaled = fft.fft2(fft.fftshift(field_scaled))
+        fx = fft.fftfreq(wavefront.n_samples_xy[0],
+                         d=wavefront.delta[0], device=wavefront.device)
+        fy = fft.fftfreq(wavefront.n_samples_xy[1],
+                         d=wavefront.delta[1], device=wavefront.device)
+        fx, fy = torch.meshgrid(fx, fy, indexing="ij")
+
+        c = (wavefront.curv_r / (wavefront.curv_r + self.z))
+        kernel = c * torch.exp(-1j * torch.pi * lambd * self.z * c
+                               * (fx**2. + fy**2.) / 2.)
+        new_field = fft.ifftshift(fft.ifft2(field_scaled * kernel))
+
+        #update wavefront bounds
+        full_out_size = [(wavefront.wf_bounds[1] - wavefront.wf_bounds[0])
+                         * (wavefront.curv_r + self.z) / wavefront.curv_r,
+                         (wavefront.wf_bounds[3] - wavefront.wf_bounds[2])
+                         * (wavefront.curv_r + self.z) / wavefront.curv_r]
+        new_bounds = [-0.5 * full_out_size[0], 0.5 * full_out_size[0],
+                      -0.5 * full_out_size[1], 0.5 * full_out_size[1]]
+        new_shape = wavefront.n_samples_xy
+        wavefront.update_bounds(new_bounds, new_shape)
+
+        # Add analytical part back in
+        new_field = new_field * torch.exp(
+            1j * wave_k / (2 * (wavefront.curv_r + self.z))
+            * (wavefront.x_array**2.0 + wavefront.y_array**2.0))
+
+        wavefront.field = (torch.exp(torch.tensor(1j * wave_k * self.z))
+                           * new_field).flatten(1, 2)
+        wavefront.z = wavefront.z + self.z
+
+
 '''
 class DebyeProp(FreeSpace):
     """

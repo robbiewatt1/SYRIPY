@@ -1,3 +1,4 @@
+from __future__ import annotations
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -10,7 +11,7 @@ class Wavefront(torch.nn.Module):
     """
 
     def __init__(self, z: float, omega: float, wf_bounds: List[float],
-                 n_samples_xy: List[int], dims: int = 2,
+                 n_samples_xy: List[int], dims: int = 2, curv_r: float = 0,
                  device: Optional[torch.device] = None) -> None:
         """
         :param z: Longitudinal position of wavefront
@@ -19,6 +20,7 @@ class Wavefront(torch.nn.Module):
         :param n_samples_xy: Samples in wavefront [n_x, n_y]
         :param dims: Polarisation dimensions of field. (dims = 2 -> (x, y)
             3 -> (x, y, z))
+        :param curv_r: Wavefront radius of  curvature.
         :param device: Device being used (e.g. cpu / gpu)
         """
         super().__init__()
@@ -27,6 +29,7 @@ class Wavefront(torch.nn.Module):
         self.wf_bounds = wf_bounds
         self.n_samples_xy = n_samples_xy
         self.dims = dims
+        self.curv_r = curv_r
         self.device = device
         self.n_samples = n_samples_xy[0] * n_samples_xy[1]
         self.delta = [(wf_bounds[1] - wf_bounds[0]) / n_samples_xy[0],
@@ -98,15 +101,17 @@ class Wavefront(torch.nn.Module):
         self.field = self.field.reshape(2, self.n_samples_xy[0],
                                         self.n_samples_xy[1])
         # Stupid function doesn't work for complex so take this out as batch
-        self.field = torch.stack([self.field.real, self.field.imag])
-        self.field = torch.nn.functional.interpolate(
-            self.field, scale_factor=(fact, fact), mode="bilinear",
-            antialias=True)
-        self.field = self.field[0] + 1j * self.field[1]
-        self.field = self.field.flatten(1, 2)
+        field_real = torch.nn.functional.interpolate(
+            self.field.real[None], scale_factor=(fact, fact),
+            mode="nearest")[0]
+        field_imag = torch.nn.functional.interpolate(
+            self.field.imag[None], scale_factor=(fact, fact),
+            mode="nearest")[0]
+        self.field = field_real + 1j * field_imag
 
+        self.field = self.field.flatten(1, 2)
         self.n_samples_xy = [self.n_samples_xy[0] * fact,
-                             self.n_samples_xy[0] * fact]
+                             self.n_samples_xy[1] * fact]
         self.x_axis = torch.linspace(self.wf_bounds[0] + self.delta[0] / 2,
                                      self.wf_bounds[1], self.n_samples_xy[0],
                                      device=self.device)
@@ -118,6 +123,19 @@ class Wavefront(torch.nn.Module):
         self.coords = torch.stack((self.x_array, self.y_array,
                                    self.z * torch.ones_like(self.x_array)),
                                   dim=0).flatten(1, 2)
+
+    def add_field(self, wavefront: Wavefront) -> None:
+        """
+        Adds wavefront field to current field value
+        :param wavefront: Wavefront at same location with same extent
+        """
+        # Check that wavefronts match
+        if (self.wf_bounds != wavefront.wf_bounds or
+            self.n_samples_xy != wavefront.n_samples_xy or
+            self.z != wavefront.z):
+            raise Exception("Only wavefronts with same parameters can be "
+                            "summed.")
+        self.field += wavefront.field
 
     @torch.jit.export
     def update_bounds(self, bounds: List[float], n_samples_xy: List[int]
@@ -212,7 +230,7 @@ class Wavefront(torch.nn.Module):
         :return: Intensity array
         """
         # Can't use abs with jit so need to do this with .real
-        return torch.sum(self.field.real**2.0 + self.field.imag**2.0,
+        return torch.sum((self.field.real**2.0 + self.field.imag**2.0).float(),
                          dim=0).reshape(self.n_samples_xy[0],
                                         self.n_samples_xy[1])
 

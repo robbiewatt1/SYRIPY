@@ -6,11 +6,11 @@ from typing import Optional, Tuple
 import copy
 
 
-class FieldSolver(torch.nn.Module):
+class SplitSolver(torch.nn.Module):
     """
     Class which solves the Liénard–Wiechert field at a wavefront for a given
-    particle trajectory. Field is calculated assuming 1 nc of charge and SI
-    units apart from time in ns.
+    particle trajectory. This does the same calculation as FieldSolver, however
+    it splits the track at a given time and returns two wavefronts
     """
 
     def __init__(self, wavefront: Wavefront, track: Track,
@@ -26,6 +26,8 @@ class FieldSolver(torch.nn.Module):
         self.track = track
         self.blocks = blocks
         self.c_light = 0.299792458
+        self.split_index = None
+        self.wavefront_curve = None
 
         # Check that wavefront / track device are both the same
         if track.device != wavefront.device:
@@ -39,7 +41,7 @@ class FieldSolver(torch.nn.Module):
                             f"observation points and {self.blocks} blocks.")
 
     @torch.jit.export
-    def switch_device(self, device: torch.device) -> "FieldSolver":
+    def switch_device(self, device: torch.device) -> "SplitSolver":
         """
         Changes the device that the class data is stored on.
         :param device: Device to switch to.
@@ -50,14 +52,17 @@ class FieldSolver(torch.nn.Module):
         return self
 
     @torch.jit.ignore
-    def set_dt(self, new_samples: int, t_start: Optional[float] = None,
-               t_end: Optional[float] = None, n_sample: Optional[float] = None,
-               flat_power: float = 0.25, mode: str = "cubic") -> None:
+    def set_track(self, t_split: float, new_samples: int,
+                  t_start: Optional[float] = None,
+                  t_end: Optional[float] = None,
+                  n_sample: Optional[float] = None, flat_power: float = 0.25,
+                  mode: str = "cubic") -> None:
         """
-        Sets the track samples based on large values of objective function
-        obj = |grad(1/grad(g))|. Where g(t) is the phase function. Takes sample
-        along x dimension at y=0. Also calculates the radius of curvature of the
-        wavefront.
+        Calculates the split index of the track and sets the track samples
+        based on large values of objective function obj = |grad(1/grad(g))|.
+        Where g(t) is the phase function. Takes sample along x dimension at y=0.
+        Also calculates the radius of curvature of the  wavefront.
+        :param t_split: Time at which the track is split
         :param new_samples: Number of new samples along trajectory.
         :param t_start: Start time for integration. If t_start=None start
          time of original track will be used.
@@ -79,6 +84,9 @@ class FieldSolver(torch.nn.Module):
         if mode.lower() not in ["cubic", "nn"]:
             raise Exception(f"Unknown interpolation mode {mode}. Please use "
                             f"either \"cubic\" or \"nn\".")
+
+        self.split_index = torch.argmin(torch.abs(self.track.time - t_split)
+                                        ) // 2
 
         # Reset the wavefront
         self.wavefront.reset()
@@ -177,75 +185,9 @@ class FieldSolver(torch.nn.Module):
                     ..., sample_index]
 
     @torch.jit.export
-    def solve_field(self, bunch_index: int = -1, solve_ends: bool = True
-                    ) -> Wavefront:
-        """
-        Main callable function to solve the field for either a single particle
-        or a sample from a bunch.
-        :param bunch_index: Index of particle to solve. If we are just solving a
-         single central trajectory then bunch_index=-1 which is the default.
-        :param solve_ends: If true then we use a first order asymptotic
-         expansion to solve the ends of the integral.
-        :return: The wavefront with calculated field array.
-        """
-
-        if bunch_index == -1:
-            if self.track.r.shape[0] == 0:
-                raise Exception(
-                    "Cannot calculate particle field because track hasn't "
-                    "been simulated yet. Please simulate track with "
-                    "track.sim_single_c() or track.sim_single() before trying "
-                    "to solve field.")
-            r = self.track.r
-            beta = self.track.beta
-            gamma = self.track.gamma
-        else:
-            if self.track.bunch_r.shape[0] == 0:
-                raise Exception(
-                    "Cannot calculate bunch sample field because bunch tracks "
-                    "haven't been simulated yet. Please simulate bunch track "
-                    "with  track.sim_bunch_c() or track.sim_bunch() before "
-                    "trying to solve field.")
-            r = self.track.bunch_r[bunch_index]
-            beta = self.track.bunch_beta[bunch_index]
-            gamma = self.track.bunch_gamma[bunch_index]
-        return self._solve_field(self.track.time, r, beta, gamma, solve_ends,
-                                 solve_ends)
-
-    @torch.jit.export
-    def solve_field_vmap(self, bunch_index: torch.Tensor,
-                         solve_ends: bool = True) -> Wavefront:
-        """
-        Main callable function to solve the field if we are using torch's vmap
-        method to small simulations in batch mode.
-        :param bunch_index: Batch tensor of indices to be solved.
-        :param solve_ends: If true then we use a first order asymptotic
-         expansion to solve the ends of the integral.
-        :return: The wavefront with calculated field array.
-        """
-        r = self.track.bunch_r[bunch_index[None]][0]
-        beta = self.track.bunch_beta[bunch_index[None]][0]
-        gamma = self.track.bunch_gamma[bunch_index[None]][0]
-        return self._solve_field(self.track.time, r, beta, gamma, solve_ends,
-                                 solve_ends)
-
-    def forward(self, time: torch.Tensor,  r: torch.Tensor, beta: torch.Tensor,
-                gamma: torch.Tensor, solve_ends: bool = True) -> Wavefront:
-        """
-        Forward function is a wrapper for the base solver function _solve_field.
-        Doesn't depend on class track variables, so can be useful for compiling
-        :param time: Time samples along track.
-        :param r: Position samples along track.
-        :param beta: Velocity samples along track.
-        :param gamma: Particle lorentz factor.
-        :param solve_ends: If true then we use a first order asymptotic
-         expansion to solve the ends of the integral to infinity.
-        """
-        return self._solve_field(time, r, beta, gamma, solve_ends, solve_ends)
-
-    @torch.jit.export
-    def solve_field_split(self, bunch_index: int = -1, split_time: float = 0,
-                          plot_track: bool = False):
+    def solve_field(self, split_time: float, bunch_index: int = -1,
+                    plot_track: bool = False, solve_ends: bool = True
+                    ) -> Tuple[Wavefront, Wavefront]:
         """
         Splits the track into two parts at time index closest to split_time and
         calculates a separate field for both parts of the track.
@@ -254,8 +196,14 @@ class FieldSolver(torch.nn.Module):
         :param split_time: Time when the track is split.
         :param plot_track: Plots the split track to check time index is in the
          right place.
+        :param solve_ends: If true then ends of the
         :return: (wavefront_1, wavefront_2) with updated field array
         """
+
+        if self.split_index is None:
+            raise Exception("Set_track function must be called before field"
+                            " can be calculated")
+
         if bunch_index == -1:
             if self.track.r.shape[0] == 0:
                 raise Exception(
@@ -277,53 +225,42 @@ class FieldSolver(torch.nn.Module):
             beta = self.track.bunch_beta[bunch_index]
             gamma = self.track.bunch_gamma[bunch_index]
 
-        if split_time < self.track.time[0] or split_time > self.track.time[-1]:
-            raise Exception(
-                f"Split time: {split_time}, is outside the range of the track. "
-                f"i.e. min = {self.track.time[0]}, max = {self.track.time[-1]}."
-            )
-
-        split_index = torch.argmin(torch.abs(self.track.time - split_time))
-        if split_index % 2 == 0:
-            split_index += 1
-
-        wavefront_1 = copy.deepcopy(self._solve_field(
-            self.track.time[:split_index], r[:, :split_index],
-            beta[:, :split_index], gamma, True, False))
-        wavefront_2 = self._solve_field(
-            self.track.time[split_index-1:], r[:, split_index-1:],
-            beta[:, split_index-1:], gamma, False, True)
-
-        if plot_track:
-            fig, ax = plt.subplots()
-            ax.plot(r[2, :split_index].cpu().detach(),
-                    r[0, :split_index].cpu(), color="red")
-            ax.plot(r[2, split_index-1:].cpu().detach(),
-                    r[0, split_index-1:].cpu().detach(), color="blue")
-            return wavefront_1, wavefront_2, (fig, ax)
-        else:
-            return wavefront_1, wavefront_2
+        return self._solve_field(split_time, self.track.time, r, beta, gamma,
+                                 plot_track, solve_ends, solve_ends)
 
     @torch.jit.export
-    def _solve_field(self, time: torch.Tensor, r: torch.Tensor,
-                     beta: torch.Tensor, gamma: torch.Tensor,
-                     solve_ends_l: bool = True,
-                     solve_ends_r: bool = True) -> Wavefront:
+    def _solve_field(self, split_time: float, time: torch.Tensor,
+                     r: torch.Tensor, beta: torch.Tensor, gamma: torch.Tensor,
+                     plot_track: bool = False, solve_ends_l: bool = True,
+                     solve_ends_r: bool = True) -> Tuple[Wavefront, Wavefront]:
         """
         Function which solves the integral. However, this shouldn't be called
         directly as it requires track information as an argument.
+        :param split_time: Time at which track is split.
         :param time: Time samples along track.
         :param r: Position samples along track.
         :param beta: Velocity samples along track.
         :param gamma: Particle lorentz factor.
-        :param solve_ends_l: If true then we use a first order asymptotic
+        :param plot_track: Plots the split track to check time index is in the
+         right place.
+         :param solve_ends_l: If true then we use a first order asymptotic
          expansion to solve the left ends of the integral to infinity.
         :param solve_ends_r: If true then we use a first order asymptotic
          expansion to solve the right ends of the integral to infinity.
         """
 
         # Reset the wavefront
-        self.wavefront.reset()
+        wavefront1 = copy.deepcopy(self.wavefront)
+        wavefront2 = copy.deepcopy(self.wavefront)
+        wavefront1.reset()
+        wavefront2.reset()
+
+        if plot_track:
+            fig, ax = plt.subplots()
+            ax.plot(r[2, 2*self.split_index:].cpu().detach(),
+                    r[0, 2*self.split_index:].cpu().detach(), color="red")
+            ax.plot(r[2, :2*self.split_index].cpu().detach(),
+                    r[0, :2*self.split_index].cpu().detach(), color="blue")
 
         # Loop blocks and perform calculation
         block_size = self.wavefront.coords.shape[1] // self.blocks
@@ -352,41 +289,51 @@ class FieldSolver(torch.nn.Module):
             int2 = - self.c_light * n_dir / (self.wavefront.omega * r_norm**2.0)
 
             # Solve main part of integral
-            imag1, real1 = self.filon_method(
-                phase, delta_phase, int1 / phase_grad, self.wavefront.omega)
-            real2, imag2 = self.filon_method(
-                phase, delta_phase, int2 / phase_grad, self.wavefront.omega)
+            imag1_wf1, imag1_wf2, real1_wf1, real1_wf2 = self.filon_method(
+                phase, delta_phase, int1 / phase_grad, self.wavefront.omega,
+                split_index)
+            imag2_wf1, imag2_wf2, real2_wf1, real2_wf2 = self.filon_method(
+                phase, delta_phase, int2 / phase_grad, self.wavefront.omega,
+                split_index)
 
-            field = (real1 - real2 + 1j * (imag1 + imag2))
+            field1 = (real1_wf1 - real2_wf1 + 1j * (imag1_wf1 + imag2_wf1))
+            field2 = (real1_wf2 - real2_wf2 + 1j * (imag1_wf2 + imag2_wf2))
 
             # Solve end points to inf
             if solve_ends_l:
                 f_l = int1[:, :, 0] + 1j * int2[:, :, 0]
-                field -= (torch.exp(1j * self.wavefront.omega * phase[:, :, 0])
+                field1 -= (torch.exp(1j * self.wavefront.omega * phase[:, :, 0])
                           * f_l / phase_grad[:, :, 0]) * 1j \
                          / self.wavefront.omega
+                print("here")
             if solve_ends_r:
                 f_r = int1[:, :, -1] + 1j * int2[:, :, -1]
-                field += (torch.exp(1j * self.wavefront.omega * phase[:, :, -1])
+                field2 += (torch.exp(1j * self.wavefront.omega * phase[:, :, -1])
                          * f_r / phase_grad[:, :, -1]) * 1j \
                          / self.wavefront.omega
 
             # Add in initial phase part
-            field = field * torch.exp(1j * r2_xy[:, 0] / (2. * r_obs[2, :, 0])
-                                      * self.wavefront.omega / self.c_light
-                                      ) * self.wavefront.omega
+            field1 = field1 * torch.exp(1j * r2_xy[:, 0] / (2. * r_obs[2, :, 0])
+                                        * self.wavefront.omega / self.c_light
+                                        ) * self.wavefront.omega
+            field2 = field2 * torch.exp(1j * r2_xy[:, 0] / (2. * r_obs[2, :, 0])
+                                        * self.wavefront.omega / self.c_light
+                                        ) * self.wavefront.omega
 
             # First method doesn't work with vmap so need this
             if self.blocks > 1:
-                self.wavefront.field[:, bi:bf] = field
+                wavefront1.field[:, bi:bf] = field1
+                wavefront2.field[:, bi:bf] = field1
             else:
-                self.wavefront.field = field
-        return self.wavefront
+                wavefront1.field = field1
+                wavefront2.field = field2
+        return wavefront1, wavefront2
 
     @staticmethod
     def filon_method(x_samples: torch.Tensor, delta_x: torch.Tensor,
-                     f_samples: torch.Tensor, omega: float
-                     ) -> Tuple[torch.Tensor, torch.Tensor]:
+                     f_samples: torch.Tensor, omega: float, split_index: int,
+                     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor,
+                                torch.Tensor]:
         """
         Filon based method for integrating function multiplied by a rapidly
         oscillating sine wave. I = int[f(x) sin(omega x)], omega >> 1. Uses a
@@ -395,6 +342,7 @@ class FieldSolver(torch.nn.Module):
         :param delta_x: Difference between samples.
         :param f_samples: Samples of non-oscillating function.
         :param omega: Oscillation frequency.
+        :param split_index: Index at which track is split.
         :return: Integration result.
         """
         sin_x1 = torch.sin(omega * x_samples[..., 1:-1:2])
@@ -437,13 +385,17 @@ class FieldSolver(torch.nn.Module):
                   + cos_x1 * ((x2x0 * x2x1 - 2.) * sin_x2x1 + (x2x1 + x2x0)
                               * cos_x2x1 - 2. * sin_x1x0 + x1x0 * cos_x1x0)
                   ) / (omega * x2x0 * x2x1)
+        sin_term = w0_sin * f_samples[..., :-2:2] \
+                   + w1_sin * f_samples[..., 1:-1:2] \
+                   + w2_sin * f_samples[..., 2::2]
+        cos_term = w0_cos * f_samples[..., :-2:2] \
+                   + w1_cos * f_samples[..., 1:-1:2] \
+                   + w2_cos * f_samples[..., 2::2]
 
-        return (torch.sum(w0_sin * f_samples[..., :-2:2]
-                          + w1_sin * f_samples[..., 1:-1:2]
-                          + w2_sin * f_samples[..., 2::2], dim=-1),
-                torch.sum(w0_cos * f_samples[..., :-2:2]
-                          + w1_cos * f_samples[..., 1:-1:2]
-                          + w2_cos * f_samples[..., 2::2], dim=-1))
+        return (torch.sum(sin_term[..., :split_index], dim=-1),
+                torch.sum(sin_term[..., split_index:], dim=-1),
+                torch.sum(cos_term[..., :split_index], dim=-1),
+                torch.sum(cos_term[..., split_index:], dim=-1))
 
     @staticmethod
     def cumulative_trapz(x: torch.Tensor, y: torch.Tensor):
@@ -459,7 +411,6 @@ class FieldSolver(torch.nn.Module):
         result = torch.zeros_like(y)
         result[..., 1:] = torch.cumsum(delta_y, dim=-1)
         return result, delta_y
-
 
 class CubicInterp:
     """
