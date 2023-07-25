@@ -2,6 +2,8 @@ import matplotlib.pyplot as plt
 import torch
 from .Wavefront import Wavefront
 from .Tracking import Track
+from .Interpolation import CubicInterp
+
 from typing import Optional, Tuple
 import copy
 
@@ -40,6 +42,11 @@ class SplitSolver(torch.nn.Module):
                             f"blocks. {self.wavefront.coords.shape[1]} "
                             f"observation points and {self.blocks} blocks.")
 
+        self.wf_centre = [
+            (self.wavefront.wf_bounds[1] + self.wavefront.wf_bounds[0]) / 2,
+            (self.wavefront.wf_bounds[3] + self.wavefront.wf_bounds[2]) / 2,
+            self.wavefront.z]
+
     @torch.jit.export
     def switch_device(self, device: torch.device) -> "SplitSolver":
         """
@@ -56,7 +63,7 @@ class SplitSolver(torch.nn.Module):
                   t_start: Optional[float] = None,
                   t_end: Optional[float] = None,
                   n_sample: Optional[float] = None, flat_power: float = 0.25,
-                  mode: str = "cubic") -> None:
+                  mode: str = "cubic", plot_track: bool = False) -> None:
         """
         Calculates the split index of the track and sets the track samples
         based on large values of objective function obj = |grad(1/grad(g))|.
@@ -73,6 +80,8 @@ class SplitSolver(torch.nn.Module):
         :param flat_power: Power to which the objective function is raised. This
          increases the number of samples in the noisy bit.
         :param mode: Interpolation mode. Can be cubic or nn (nearest neighbor).
+        :param plot_track: Plots the split track to check time index is in the
+         right place.
         """
 
         if new_samples % 2 == 0:
@@ -84,9 +93,6 @@ class SplitSolver(torch.nn.Module):
         if mode.lower() not in ["cubic", "nn"]:
             raise Exception(f"Unknown interpolation mode {mode}. Please use "
                             f"either \"cubic\" or \"nn\".")
-
-        self.split_index = torch.argmin(torch.abs(self.track.time - t_split)
-                                        ) // 2
 
         # Reset the wavefront
         self.wavefront.reset()
@@ -104,7 +110,8 @@ class SplitSolver(torch.nn.Module):
 
         t_0 = torch.argmin(torch.abs(self.track.time - t_start))
         t_1 = torch.argmin(torch.abs(self.track.time - t_end)) + 1
-        self.track.time = self.track.time - self.track.time[t_0]
+        split_index = torch.argmin(torch.abs(self.track.time[t_0:t_1]
+                                             - t_split))
 
         # Calculate grad(1/ grad(phi)) at sample_x points.
         start_index = self.wavefront.n_samples_xy[1] // 2
@@ -124,23 +131,29 @@ class SplitSolver(torch.nn.Module):
         grad_inv_grad = torch.gradient(1. / phase_grad, spacing=(
             self.track.time[t_0:t_1],), edge_order=1, dim=1)[0]
 
+        objective_1, _ = torch.max(torch.abs(
+            grad_inv_grad[:, :split_index]), dim=0)
+        peak_index_1 = t_0 + int(torch.sum(objective_1 * torch.arange(
+            objective_1.shape[0], device=self.device)) / torch.sum(objective_1))
+        curv_1 = ((self.track.r[0, peak_index_1] - self.wf_centre[0])**2.
+                 + (self.track.r[1, peak_index_1] - self.wf_centre[1])**2.
+                 + (self.track.r[2, peak_index_1] - self.wf_centre[2])**2.)**0.5
+
+        objective_2, _ = torch.max(torch.abs(
+            grad_inv_grad[:, split_index:]), dim=0)
+        peak_index_2 = t_0 + split_index + int(torch.sum(
+            objective_2 * torch.arange(objective_2.shape[0], device=self.device)
+            ) / torch.sum(objective_2))
+        curv_2 = ((self.track.r[0, peak_index_2] - self.wf_centre[0])**2.
+                 + (self.track.r[1, peak_index_2] - self.wf_centre[1])**2.
+                 + (self.track.r[2, peak_index_2] - self.wf_centre[2])**2.)**0.5
+        self.wavefront_curve = [curv_1, curv_2]
+
         # New samples are then evenly spaced over the cumulative distribution
         objective, _ = torch.max(torch.abs(grad_inv_grad), dim=0)
         cumulative_obj = torch.cumsum(objective**flat_power, dim=0)
         cumulative_obj = (cumulative_obj - cumulative_obj[0]) \
                          / (cumulative_obj[-1] - cumulative_obj[0])
-
-        # Use the objective function to calculate the radius of curvature
-        peak_index = t_0 + int(torch.sum(objective * torch.arange(
-            objective.shape[0], device=self.device)) / torch.sum(objective))
-        wf_centre = [
-            (self.wavefront.wf_bounds[1] + self.wavefront.wf_bounds[0]) / 2,
-            (self.wavefront.wf_bounds[3] + self.wavefront.wf_bounds[2]) / 2,
-            self.wavefront.z]
-        self.wavefront.curv_r = (
-                (self.track.r[0, peak_index] - wf_centre[0])**2.
-              + (self.track.r[1, peak_index] - wf_centre[1])**2.
-              + (self.track.r[2, peak_index] - wf_centre[2])**2.)**0.5
 
         # Now update all the samples
         track_samples = torch.linspace(0., 1, new_samples, device=self.device)
@@ -184,18 +197,29 @@ class SplitSolver(torch.nn.Module):
                 self.track.bunch_beta = self.track.bunch_beta[..., t_0:t_1][
                     ..., sample_index]
 
+        # Update split index for new track samples and set time to start at 0
+        self.split_index = torch.argmin(torch.abs(self.track.time - t_split)
+                                        ) // 2
+        self.track.time = self.track.time - self.track.time[0]
+
+        # Here we plot the split track if required
+        if plot_track:
+            fig, ax = plt.subplots()
+            ax.plot(self.track.r[2, self.split_index*2:].cpu().detach(),
+                    self.track.r[0, self.split_index*2:].cpu().detach(),
+                    color="red")
+            ax.plot(self.track.r[2, :self.split_index*2].cpu().detach(),
+                    self.track.r[0, :self.split_index*2].cpu().detach(),
+                    color="blue")
+
     @torch.jit.export
-    def solve_field(self, split_time: float, bunch_index: int = -1,
-                    plot_track: bool = False, solve_ends: bool = True
+    def solve_field(self, bunch_index: int = -1, solve_ends: bool = True
                     ) -> Tuple[Wavefront, Wavefront]:
         """
         Splits the track into two parts at time index closest to split_time and
         calculates a separate field for both parts of the track.
         :param bunch_index: Batch tensor of indices to be solved.
          expansion to solve the ends of the integral.
-        :param split_time: Time when the track is split.
-        :param plot_track: Plots the split track to check time index is in the
-         right place.
         :param solve_ends: If true then ends of the
         :return: (wavefront_1, wavefront_2) with updated field array
         """
@@ -225,25 +249,22 @@ class SplitSolver(torch.nn.Module):
             beta = self.track.bunch_beta[bunch_index]
             gamma = self.track.bunch_gamma[bunch_index]
 
-        return self._solve_field(split_time, self.track.time, r, beta, gamma,
-                                 plot_track, solve_ends, solve_ends)
+        return self._solve_field(self.track.time, r, beta, gamma, solve_ends,
+                                 solve_ends)
 
     @torch.jit.export
-    def _solve_field(self, split_time: float, time: torch.Tensor,
-                     r: torch.Tensor, beta: torch.Tensor, gamma: torch.Tensor,
-                     plot_track: bool = False, solve_ends_l: bool = True,
-                     solve_ends_r: bool = True) -> Tuple[Wavefront, Wavefront]:
+    def _solve_field(self, time: torch.Tensor, r: torch.Tensor,
+                     beta: torch.Tensor, gamma: torch.Tensor,
+                     solve_ends_l: bool = True, solve_ends_r: bool = True
+                     ) -> Tuple[Wavefront, Wavefront]:
         """
         Function which solves the integral. However, this shouldn't be called
         directly as it requires track information as an argument.
-        :param split_time: Time at which track is split.
         :param time: Time samples along track.
         :param r: Position samples along track.
         :param beta: Velocity samples along track.
         :param gamma: Particle lorentz factor.
-        :param plot_track: Plots the split track to check time index is in the
-         right place.
-         :param solve_ends_l: If true then we use a first order asymptotic
+        :param solve_ends_l: If true then we use a first order asymptotic
          expansion to solve the left ends of the integral to infinity.
         :param solve_ends_r: If true then we use a first order asymptotic
          expansion to solve the right ends of the integral to infinity.
@@ -254,13 +275,8 @@ class SplitSolver(torch.nn.Module):
         wavefront2 = copy.deepcopy(self.wavefront)
         wavefront1.reset()
         wavefront2.reset()
-
-        if plot_track:
-            fig, ax = plt.subplots()
-            ax.plot(r[2, 2*self.split_index:].cpu().detach(),
-                    r[0, 2*self.split_index:].cpu().detach(), color="red")
-            ax.plot(r[2, :2*self.split_index].cpu().detach(),
-                    r[0, :2*self.split_index].cpu().detach(), color="blue")
+        wavefront1.curv_r = self.wavefront_curve[0]
+        wavefront2.curv_r = self.wavefront_curve[1]
 
         # Loop blocks and perform calculation
         block_size = self.wavefront.coords.shape[1] // self.blocks
@@ -291,10 +307,10 @@ class SplitSolver(torch.nn.Module):
             # Solve main part of integral
             imag1_wf1, imag1_wf2, real1_wf1, real1_wf2 = self.filon_method(
                 phase, delta_phase, int1 / phase_grad, self.wavefront.omega,
-                split_index)
+                self.split_index)
             imag2_wf1, imag2_wf2, real2_wf1, real2_wf2 = self.filon_method(
                 phase, delta_phase, int2 / phase_grad, self.wavefront.omega,
-                split_index)
+                self.split_index)
 
             field1 = (real1_wf1 - real2_wf1 + 1j * (imag1_wf1 + imag2_wf1))
             field2 = (real1_wf2 - real2_wf2 + 1j * (imag1_wf2 + imag2_wf2))
@@ -303,14 +319,13 @@ class SplitSolver(torch.nn.Module):
             if solve_ends_l:
                 f_l = int1[:, :, 0] + 1j * int2[:, :, 0]
                 field1 -= (torch.exp(1j * self.wavefront.omega * phase[:, :, 0])
-                          * f_l / phase_grad[:, :, 0]) * 1j \
-                         / self.wavefront.omega
-                print("here")
+                           * f_l / phase_grad[:, :, 0]) * 1j \
+                          / self.wavefront.omega
             if solve_ends_r:
                 f_r = int1[:, :, -1] + 1j * int2[:, :, -1]
                 field2 += (torch.exp(1j * self.wavefront.omega * phase[:, :, -1])
-                         * f_r / phase_grad[:, :, -1]) * 1j \
-                         / self.wavefront.omega
+                           * f_r / phase_grad[:, :, -1]) * 1j \
+                          / self.wavefront.omega
 
             # Add in initial phase part
             field1 = field1 * torch.exp(1j * r2_xy[:, 0] / (2. * r_obs[2, :, 0])
@@ -391,7 +406,6 @@ class SplitSolver(torch.nn.Module):
         cos_term = w0_cos * f_samples[..., :-2:2] \
                    + w1_cos * f_samples[..., 1:-1:2] \
                    + w2_cos * f_samples[..., 2::2]
-
         return (torch.sum(sin_term[..., :split_index], dim=-1),
                 torch.sum(sin_term[..., split_index:], dim=-1),
                 torch.sum(cos_term[..., :split_index], dim=-1),
@@ -411,53 +425,3 @@ class SplitSolver(torch.nn.Module):
         result = torch.zeros_like(y)
         result[..., 1:] = torch.cumsum(delta_y, dim=-1)
         return result, delta_y
-
-class CubicInterp:
-    """
-    Cubic spline interpolator class using pytorch. Can perform multiple
-    interpolations along batch dimension.
-    """
-
-    def __init__(self, x: torch.Tensor, y: torch.Tensor) -> None:
-        """
-        :param x: x samples
-        :param y: y samples
-        """
-        self.x = x
-        self.y = y
-        self.device = x.device
-        self.A = torch.tensor([
-            [1, 0, -3, 2],
-            [0, 1, -2, 1],
-            [0, 0, 3, -2],
-            [0, 0, -1, 1]],
-            dtype=x.dtype, device=self.device)
-
-    def h_poly(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Calculates the Hermite polynomials
-        :param x: Locations to calculate polynomials at
-        :return: Hermite polynomials
-        """
-        xx = x[..., None, :] ** torch.arange(
-            4, device=self.device)[..., :, None]
-        return torch.matmul(self.A, xx)
-
-    def __call__(self, xs: torch.Tensor) -> torch.Tensor:
-        """
-        Performs interpolation at location xs.
-        :param xs: locations to interpolate
-        :return: Interpolated value
-        """
-        m = ((self.y[..., 1:] - self.y[..., :-1]) /
-             (self.x[..., 1:] - self.x[..., :-1]))
-        m = torch.cat([m[..., [0]], (m[..., 1:] + m[..., :-1]) / 2,
-                       m[..., [-1]]], dim=-1)
-        idx = torch.searchsorted(self.x[..., 1:].contiguous(), xs)
-        dx = (torch.gather(self.x, dim=-1, index=idx+1)
-              - torch.gather(self.x, dim=-1, index=idx))
-        hh = self.h_poly((xs - torch.gather(self.x, dim=-1, index=idx)) / dx)
-        return (hh[..., 0, :] * torch.gather(self.y, dim=-1, index=idx)
-                + hh[..., 1, :] * torch.gather(m, dim=-1, index=idx)
-                * dx + hh[..., 2, :] * torch.gather(self.y, dim=-1, index=idx+1)
-                + hh[..., 3, :] * torch.gather(m, dim=-1, index=idx+1) * dx)

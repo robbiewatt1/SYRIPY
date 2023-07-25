@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import torch
 from .Wavefront import Wavefront
 from .Tracking import Track
+from .Interpolation import CubicInterp
 from typing import Optional, Tuple
 import copy
 
@@ -50,9 +51,10 @@ class FieldSolver(torch.nn.Module):
         return self
 
     @torch.jit.ignore
-    def set_dt(self, new_samples: int, t_start: Optional[float] = None,
-               t_end: Optional[float] = None, n_sample: Optional[float] = None,
-               flat_power: float = 0.25, mode: str = "cubic") -> None:
+    def set_track(self, new_samples: int, t_start: Optional[float] = None,
+                  t_end: Optional[float] = None,
+                  n_sample: Optional[float] = None,
+                  flat_power: float = 0.25, mode: str = "cubic") -> None:
         """
         Sets the track samples based on large values of objective function
         obj = |grad(1/grad(g))|. Where g(t) is the phase function. Takes sample
@@ -96,7 +98,6 @@ class FieldSolver(torch.nn.Module):
 
         t_0 = torch.argmin(torch.abs(self.track.time - t_start))
         t_1 = torch.argmin(torch.abs(self.track.time - t_end)) + 1
-        self.track.time = self.track.time - self.track.time[t_0]
 
         # Calculate grad(1/ grad(phi)) at sample_x points.
         start_index = self.wavefront.n_samples_xy[1] // 2
@@ -175,6 +176,9 @@ class FieldSolver(torch.nn.Module):
                     ..., sample_index]
                 self.track.bunch_beta = self.track.bunch_beta[..., t_0:t_1][
                     ..., sample_index]
+
+        # Set time to be 0 at start
+        self.track.time = self.track.time - self.track.time[0]
 
     @torch.jit.export
     def solve_field(self, bunch_index: int = -1, solve_ends: bool = True
@@ -459,54 +463,3 @@ class FieldSolver(torch.nn.Module):
         result = torch.zeros_like(y)
         result[..., 1:] = torch.cumsum(delta_y, dim=-1)
         return result, delta_y
-
-
-class CubicInterp:
-    """
-    Cubic spline interpolator class using pytorch. Can perform multiple
-    interpolations along batch dimension.
-    """
-
-    def __init__(self, x: torch.Tensor, y: torch.Tensor) -> None:
-        """
-        :param x: x samples
-        :param y: y samples
-        """
-        self.x = x
-        self.y = y
-        self.device = x.device
-        self.A = torch.tensor([
-            [1, 0, -3, 2],
-            [0, 1, -2, 1],
-            [0, 0, 3, -2],
-            [0, 0, -1, 1]],
-            dtype=x.dtype, device=self.device)
-
-    def h_poly(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Calculates the Hermite polynomials
-        :param x: Locations to calculate polynomials at
-        :return: Hermite polynomials
-        """
-        xx = x[..., None, :] ** torch.arange(
-            4, device=self.device)[..., :, None]
-        return torch.matmul(self.A, xx)
-
-    def __call__(self, xs: torch.Tensor) -> torch.Tensor:
-        """
-        Performs interpolation at location xs.
-        :param xs: locations to interpolate
-        :return: Interpolated value
-        """
-        m = ((self.y[..., 1:] - self.y[..., :-1]) /
-             (self.x[..., 1:] - self.x[..., :-1]))
-        m = torch.cat([m[..., [0]], (m[..., 1:] + m[..., :-1]) / 2,
-                       m[..., [-1]]], dim=-1)
-        idx = torch.searchsorted(self.x[..., 1:].contiguous(), xs)
-        dx = (torch.gather(self.x, dim=-1, index=idx+1)
-              - torch.gather(self.x, dim=-1, index=idx))
-        hh = self.h_poly((xs - torch.gather(self.x, dim=-1, index=idx)) / dx)
-        return (hh[..., 0, :] * torch.gather(self.y, dim=-1, index=idx)
-                + hh[..., 1, :] * torch.gather(m, dim=-1, index=idx)
-                * dx + hh[..., 2, :] * torch.gather(self.y, dim=-1, index=idx+1)
-                + hh[..., 3, :] * torch.gather(m, dim=-1, index=idx+1) * dx)
