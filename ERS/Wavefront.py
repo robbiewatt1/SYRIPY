@@ -3,6 +3,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Optional, List, Tuple
+from .Interpolation import BilinearInterp
 
 
 class Wavefront(torch.nn.Module):
@@ -26,14 +27,15 @@ class Wavefront(torch.nn.Module):
         super().__init__()
         self.z = z
         self.omega = omega
-        self.wf_bounds = wf_bounds
-        self.n_samples_xy = n_samples_xy
+        self.wf_bounds = torch.tensor(wf_bounds, device=device)
+        self.n_samples_xy = torch.tensor(n_samples_xy, device=device)
         self.dims = dims
         self.curv_r = curv_r
         self.device = device
         self.n_samples = n_samples_xy[0] * n_samples_xy[1]
-        self.delta = [(wf_bounds[1] - wf_bounds[0]) / n_samples_xy[0],
-                      (wf_bounds[3] - wf_bounds[2]) / n_samples_xy[1]]
+        self.delta = torch.tensor(
+            [(wf_bounds[1] - wf_bounds[0]) / n_samples_xy[0],
+             (wf_bounds[3] - wf_bounds[2]) / n_samples_xy[1]], device=device)
         self.x_axis = torch.linspace(wf_bounds[0] + self.delta[0] / 2,
                                      wf_bounds[1], n_samples_xy[0],
                                      device=device)
@@ -50,8 +52,8 @@ class Wavefront(torch.nn.Module):
 
         # Save the initial values in case we need to
         self.z_0 = z
-        self.wf_bounds_0 = wf_bounds
-        self.n_samples_xy_0 = n_samples_xy
+        self.wf_bounds_0 = torch.tensor(wf_bounds, device=device)
+        self.n_samples_xy_0 = torch.tensor(n_samples_xy, device=device)
 
     @torch.jit.export
     def pad_wavefront(self, pad_fact: int = 2) -> None:
@@ -65,13 +67,18 @@ class Wavefront(torch.nn.Module):
                   (self.wf_bounds[3] + self.wf_bounds[2]) / 2]
         length = [(self.wf_bounds[1] - self.wf_bounds[0]) / 2,
                   (self.wf_bounds[3] - self.wf_bounds[2]) / 2]
-        self.wf_bounds = [centre[0] - pad_fact * length[0],
-                          centre[0] + pad_fact * length[0],
-                          centre[1] - pad_fact * length[1],
-                          centre[1] + pad_fact * length[1]]
-        self.n_samples_xy = [self.n_samples_xy[0] * pad_fact,
-                             self.n_samples_xy[1] * pad_fact]
+        self.wf_bounds = torch.tensor(
+            [centre[0] - pad_fact * length[0], centre[0] + pad_fact * length[0],
+            centre[1] - pad_fact * length[1], centre[1] + pad_fact * length[1]],
+            device=self.device)
+        self.n_samples_xy = torch.tensor([self.n_samples_xy[0] * pad_fact,
+                                          self.n_samples_xy[1] * pad_fact],
+                                         device=self.device)
         self.n_samples = self.n_samples_xy[0] * self.n_samples_xy[1]
+        self.delta = torch.tensor(
+            [(self.wf_bounds[1] - self.wf_bounds[0]) / self.n_samples_xy[0],
+             (self.wf_bounds[3] - self.wf_bounds[2]) / self.n_samples_xy[1]],
+            device=self.device)
         self.x_axis = torch.linspace(self.wf_bounds[0] + self.delta[0] / 2,
                                      self.wf_bounds[1], self.n_samples_xy[0],
                                      device=self.device)
@@ -93,49 +100,94 @@ class Wavefront(torch.nn.Module):
             = self.field.reshape(self.dims, x_size_old, y_size_old)
         self.field = new_field.flatten(1, 2)
 
-    def interpolate_wavefront(self, fact: int) -> None:
+    def interpolate_wavefront(self, fact: Optional[int] = None,
+                              new_axes: Optional[List[torch.Tensor]] = None
+                              ) -> None:
         """
         Increases the wavefront resolution using interpolation.
         :param fact: Factor to increase resolution by
+        :param new_axes: New axes to interpolate to [x_axis, y_axis]
         """
+        if fact is None and new_axes is None:
+            raise Exception("Must specify either factor or new axes")
+        elif fact is not None and new_axes is not None:
+            raise Exception("Can't specify both factor and new axes")
+        elif fact is not None:
+            new_x_axis = torch.linspace(self.wf_bounds[0] + self.delta[0] / 2,
+                                        self.wf_bounds[1], self.n_samples_xy[0]
+                                        * fact, device=self.device)
+            new_y_axis = torch.linspace(self.wf_bounds[2] + self.delta[1] / 2,
+                                        self.wf_bounds[3], self.n_samples_xy[1]
+                                        * fact, device=self.device)
+        else:
+            new_x_axis, new_y_axis = new_axes
+
         self.field = self.field.reshape(2, self.n_samples_xy[0],
                                         self.n_samples_xy[1])
-        # Stupid function doesn't work for complex so take this out as batch
-        field_real = torch.nn.functional.interpolate(
-            self.field.real[None], scale_factor=(fact, fact),
-            mode="nearest")[0]
-        field_imag = torch.nn.functional.interpolate(
-            self.field.imag[None], scale_factor=(fact, fact),
-            mode="nearest")[0]
-        self.field = field_real + 1j * field_imag
-
-        self.field = self.field.flatten(1, 2)
-        self.n_samples_xy = [self.n_samples_xy[0] * fact,
-                             self.n_samples_xy[1] * fact]
-        self.x_axis = torch.linspace(self.wf_bounds[0] + self.delta[0] / 2,
-                                     self.wf_bounds[1], self.n_samples_xy[0],
-                                     device=self.device)
-        self.y_axis = torch.linspace(self.wf_bounds[2] + self.delta[1] / 2,
-                                     self.wf_bounds[3], self.n_samples_xy[1],
-                                     device=self.device)
+        self.field = BilinearInterp(self.x_axis, self.y_axis, self.field
+                                    )(new_x_axis, new_y_axis).flatten(1, 2)
+        self.n_samples_xy = torch.tensor(
+            [new_x_axis.shape[0], new_y_axis.shape[0]], device=self.device)
+        self.n_samples = self.n_samples_xy[0] * self.n_samples_xy[1]
+        self.wf_bounds = torch.tensor([new_x_axis.min(), new_x_axis.max(),
+                                       new_y_axis.min(), new_y_axis.max()],
+                                      device=self.device)
+        self.delta = torch.tensor(
+            [(self.wf_bounds[1] - self.wf_bounds[0]) / self.n_samples_xy[0],
+             (self.wf_bounds[3] - self.wf_bounds[2]) /self.n_samples_xy[1]],
+            device=self.device)
+        self.x_axis = new_x_axis
+        self.y_axis = new_y_axis
         self.x_array, self.y_array = torch.meshgrid(self.x_axis, self.y_axis,
                                                     indexing="ij")
         self.coords = torch.stack((self.x_array, self.y_array,
                                    self.z * torch.ones_like(self.x_array)),
                                   dim=0).flatten(1, 2)
 
-    def add_field(self, wavefront: Wavefront) -> None:
+    def add_field(self, wavefront: Wavefront, new_bounds: List[float] = None,
+                  new_shape: Optional[List[int]] = None) -> None:
         """
-        Adds wavefront field to current field value
+        Adds wavefront field to current field value. Uses current wavefront
+        shape unless new shape is specified
         :param wavefront: Wavefront at same location with same extent
+        :param new_bounds: New bounds if changing wavefront
+        :param new_shape: New shape if changing wavefront
         """
         # Check that wavefronts match
-        if (self.wf_bounds != wavefront.wf_bounds or
-            self.n_samples_xy != wavefront.n_samples_xy or
-            self.z != wavefront.z):
-            raise Exception("Only wavefronts with same parameters can be "
+        if self.z != wavefront.z:
+            raise Exception("Only wavefronts at the same z location can be "
                             "summed.")
-        self.field += wavefront.field
+
+        if (new_bounds is None and new_shape is not None or
+                new_bounds is not None and new_shape is None):
+            raise Exception("Must specify new shape and new bounds if "
+                            "changing wavefront dimensions")
+
+        # Check if we can just add fields or need to do some interpolation
+        if (torch.equal(self.wf_bounds, wavefront.wf_bounds) and
+            torch.equal(self.n_samples_xy, wavefront.n_samples_xy) and
+                (new_bounds or new_shape) is None):
+            self.field = self.field + wavefront.field
+        else:
+            # check if we are using current wavefront bounds or new one
+            if new_bounds is None:
+                new_x_axis = self.x_axis
+                new_y_axis = self.y_axis
+            else:
+                new_delta = torch.tensor(
+                    [(new_bounds[1] - new_bounds[0]) / new_shape[0],
+                     (new_bounds[3] - new_bounds[2]) / new_shape[1]],
+                    device=self.device)
+                new_x_axis = torch.linspace(new_bounds[0] + new_delta[0] / 2,
+                                            new_bounds[1], new_shape[0],
+                                            device=self.device)
+                new_y_axis = torch.linspace(new_bounds[2] + new_delta[1] / 2,
+                                            new_bounds[3], new_shape[1],
+                                            device=self.device)
+                self.interpolate_wavefront(new_axes=[new_x_axis, new_y_axis])
+            wavefront.interpolate_wavefront(
+                new_axes=[new_x_axis, new_y_axis])
+            self.field = self.field + wavefront.field
 
     @torch.jit.export
     def update_bounds(self, bounds: List[float], n_samples_xy: List[int]
@@ -145,9 +197,13 @@ class Wavefront(torch.nn.Module):
         :param bounds: New bounds of wavefront [xmin, xmax, ymin, ymax]
         :param n_samples_xy: Samples in wavefront [n_x, n_y]
         """
-        self.wf_bounds = bounds
-        self.n_samples_xy = n_samples_xy
+        self.wf_bounds = torch.tensor(bounds, device=self.device)
+        self.n_samples_xy = torch.tensor(n_samples_xy, device=self.device)
         self.n_samples = n_samples_xy[0] * n_samples_xy[1]
+        self.delta = torch.tensor(
+            [(self.wf_bounds[1] - self.wf_bounds[0]) / self.n_samples_xy[0],
+             (self.wf_bounds[3] - self.wf_bounds[2]) / self.n_samples_xy[1]],
+            device=self.device)
         self.x_axis = torch.linspace(self.wf_bounds[0] + self.delta[0] / 2,
                                      self.wf_bounds[1], self.n_samples_xy[0],
                                      device=self.device)
@@ -193,9 +249,10 @@ class Wavefront(torch.nn.Module):
         self.wf_bounds = self.wf_bounds_0
         self.n_samples_xy = self.n_samples_xy_0
         self.n_samples = self.n_samples_xy[0] * self.n_samples_xy[1]
-        self.delta = [
+        self.delta = torch.tensor([
             (self.wf_bounds[1] - self.wf_bounds[0]) / self.n_samples_xy[0],
-            (self.wf_bounds[3] - self.wf_bounds[2]) / self.n_samples_xy[1]]
+            (self.wf_bounds[3] - self.wf_bounds[2]) / self.n_samples_xy[1]],
+            device=self.device)
         self.x_axis = torch.linspace(self.wf_bounds[0] + self.delta[0] / 2,
                                      self.wf_bounds[1], self.n_samples_xy[0],
                                      device=self.device)
@@ -216,6 +273,9 @@ class Wavefront(torch.nn.Module):
         :param device: Device to switch to.
         """
         self.device = device
+        self.wf_bounds = self.wf_bounds.to(device)
+        self.n_samples_xy = self.n_samples_xy.to(device)
+        self.delta = self.delta.to(device)
         self.x_axis = self.x_axis.to(device)
         self.y_axis = self.y_axis.to(device)
         self.x_array = self.x_array.to(device)
@@ -248,7 +308,7 @@ class Wavefront(torch.nn.Module):
         :return: (fig, ax)
         """
         if self.dims == 1:
-            intensity = (torch.abs(self.field[0, :]) ** 2.0
+            intensity = (torch.abs(self.field[0, :])**2.0
                          ).cpu().detach().numpy()
         elif self.dims == 2:
             intensity = (torch.abs(self.field[0, :])**2.0 +
@@ -325,3 +385,5 @@ class Wavefront(torch.nn.Module):
             ax.set_xlim(axes_lim[0], axes_lim[1])
             ax.set_ylim(axes_lim[2], axes_lim[3])
         return fig, ax
+
+
