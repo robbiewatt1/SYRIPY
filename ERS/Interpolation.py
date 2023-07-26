@@ -35,20 +35,19 @@ class BilinearInterp:
         # Get sample points
         x_samples, y_samples = torch.meshgrid(new_x_axis, new_y_axis,
                                               indexing='ij')
-
         x_samples = x_samples.flatten()
         y_samples = y_samples.flatten()
 
         # Get the indices of the points to interpolate to
-        x_idx = torch.searchsorted(self.x_axis, x_samples)
-        y_idx = torch.searchsorted(self.y_axis, y_samples)
+        x_idx = torch.searchsorted(self.x_axis, x_samples, side='right')
+        y_idx = torch.searchsorted(self.y_axis, y_samples, side='right')
 
         # Check if indices are within the range of the axis
         interp_bool = torch.logical_and(
             torch.logical_and(torch.gt(x_idx, 0),
-                              torch.lt(x_idx, self.x_axis.shape[0])),
+                              torch.lt(x_idx, self.x_axis.shape[0]+1)),
             torch.logical_and(torch.gt(y_idx, 0),
-                              torch.lt(y_idx, self.y_axis.shape[0])))
+                              torch.lt(y_idx, self.y_axis.shape[0]+1)))
 
         # Wrap indices back around
         x_low = (x_idx - 1) % self.x_axis.shape[0]
