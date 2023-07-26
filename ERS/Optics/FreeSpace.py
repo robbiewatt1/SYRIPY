@@ -4,7 +4,7 @@ import numpy as np
 from ..Wavefront import Wavefront
 from .OpticalElement import OpticalElement
 from typing import List, Optional
-
+from ..Interpolation import BilinearInterp
 
 class FreeSpace(OpticalElement):
 
@@ -372,16 +372,8 @@ class TestProp(FreeSpace):
         field = wavefront.field.reshape(2, wavefront.n_samples_xy[0],
                                         wavefront.n_samples_xy[1])
         field_scaled = field / torch.exp(
-            1j * wave_k / (2 * wavefront.curv_r) * (wavefront.x_array**2.0
-                                                    + wavefront.y_array**2.0))
-        import matplotlib.pyplot as plt
-        print(wavefront.curv_r)
-        index = field_scaled.shape[1] // 2
-        fig, ax = plt.subplots()
-        ax.plot(torch.angle(field_scaled[0, index]).cpu())
-        fig, ax = plt.subplots()
-        ax.plot(torch.angle(field_scaled[0, :, index]).cpu())
-        plt.show()
+            1j * wave_k * (wavefront.x_array**2.0 + wavefront.y_array**2.0)
+            / (2 * wavefront.curv_r))
 
         # Do convolution on reduced part
         field_scaled = fft.fft2(fft.fftshift(field_scaled))
@@ -393,9 +385,11 @@ class TestProp(FreeSpace):
 
         c = (wavefront.curv_r / (wavefront.curv_r + self.z))
         kernel = c * torch.exp(-1j * torch.pi * lambd * self.z * c
-                               * (fx**2. + fy**2.) / 2.)
+                               * (fx**2. + fy**2.))
+        print(kernel.shape)
         new_field = fft.ifftshift(fft.ifft2(field_scaled * kernel))
 
+        print((wavefront.curv_r + self.z) / wavefront.curv_r)
         #update wavefront bounds
         full_out_size = [(wavefront.wf_bounds[1] - wavefront.wf_bounds[0])
                          * (wavefront.curv_r + self.z) / wavefront.curv_r,
@@ -403,13 +397,13 @@ class TestProp(FreeSpace):
                          * (wavefront.curv_r + self.z) / wavefront.curv_r]
         new_bounds = [-0.5 * full_out_size[0], 0.5 * full_out_size[0],
                       -0.5 * full_out_size[1], 0.5 * full_out_size[1]]
-        new_shape = wavefront.n_samples_xy
+        new_shape = [wavefront.n_samples_xy[0], wavefront.n_samples_xy[1]]
         wavefront.update_bounds(new_bounds, new_shape)
 
         # Add analytical part back in
         new_field = new_field * torch.exp(
-            1j * wave_k / (2 * (wavefront.curv_r + self.z))
-            * (wavefront.x_array**2.0 + wavefront.y_array**2.0))
+            1j * wave_k * (wavefront.x_array**2.0 + wavefront.y_array**2.0)
+            / (2 * (wavefront.curv_r + self.z)))
 
         wavefront.field = (torch.exp(torch.tensor(1j * wave_k * self.z))
                            * new_field).flatten(1, 2)
