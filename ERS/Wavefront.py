@@ -28,20 +28,21 @@ class Wavefront(torch.nn.Module):
         super().__init__()
         self.z = z
         self.omega = omega
-        self.wf_bounds = torch.tensor(wf_bounds, device=device)
-        self.n_samples_xy = torch.tensor(n_samples_xy, device=device)
+        self.wf_bounds = wf_bounds
+        self.n_samples_xy = n_samples_xy
         self.dims = dims
         self.curv_r = curv_r
         self.source_location = source_location
         self.device = device
         self.n_samples = n_samples_xy[0] * n_samples_xy[1]
-        self.delta = torch.tensor(
-            [(wf_bounds[1] - wf_bounds[0]) / n_samples_xy[0],
-             (wf_bounds[3] - wf_bounds[2]) / n_samples_xy[1]], device=device)
-        self.x_axis = torch.linspace(wf_bounds[0], wf_bounds[1],
-                                     n_samples_xy[0], device=device)
-        self.y_axis = torch.linspace(wf_bounds[2], wf_bounds[3],
-                                     n_samples_xy[1], device=device)
+        self.delta = [(wf_bounds[1] - wf_bounds[0]) / n_samples_xy[0],
+                      (wf_bounds[3] - wf_bounds[2]) / n_samples_xy[1]]
+        self.x_axis = torch.linspace(wf_bounds[0] + self.delta[0] / 2,
+                                     wf_bounds[1], n_samples_xy[0],
+                                     device=device)
+        self.y_axis = torch.linspace(wf_bounds[2] + self.delta[1] / 2,
+                                     wf_bounds[3], n_samples_xy[1],
+                                     device=device)
         self.x_array, self.y_array = torch.meshgrid(self.x_axis, self.y_axis,
                                                     indexing="ij")
         self.coords = torch.stack((self.x_array, self.y_array,
@@ -52,8 +53,8 @@ class Wavefront(torch.nn.Module):
 
         # Save the initial values in case we need to
         self.z_0 = z
-        self.wf_bounds_0 = torch.tensor(wf_bounds, device=device)
-        self.n_samples_xy_0 = torch.tensor(n_samples_xy, device=device)
+        self.wf_bounds_0 = wf_bounds.copy()
+        self.n_samples_xy_0 = n_samples_xy.copy()
 
     @torch.jit.export
     def pad_wavefront(self, pad_fact: int = 2) -> None:
@@ -67,22 +68,24 @@ class Wavefront(torch.nn.Module):
                   (self.wf_bounds[3] + self.wf_bounds[2]) / 2]
         length = [(self.wf_bounds[1] - self.wf_bounds[0]) / 2,
                   (self.wf_bounds[3] - self.wf_bounds[2]) / 2]
-        self.wf_bounds = torch.tensor(
-            [centre[0] - pad_fact * length[0], centre[0] + pad_fact * length[0],
-            centre[1] - pad_fact * length[1], centre[1] + pad_fact * length[1]],
-            device=self.device)
-        self.n_samples_xy = torch.tensor([self.n_samples_xy[0] * pad_fact,
-                                          self.n_samples_xy[1] * pad_fact],
-                                         device=self.device)
+        self.wf_bounds = [centre[0] - pad_fact * length[0],
+                          centre[0] + pad_fact * length[0],
+                          centre[1] - pad_fact * length[1],
+                          centre[1] + pad_fact * length[1]]
+
+        self.n_samples_xy = [self.n_samples_xy[0] * pad_fact,
+                             self.n_samples_xy[1] * pad_fact]
         self.n_samples = self.n_samples_xy[0] * self.n_samples_xy[1]
-        self.delta = torch.tensor(
-            [(self.wf_bounds[1] - self.wf_bounds[0]) / self.n_samples_xy[0],
-             (self.wf_bounds[3] - self.wf_bounds[2]) / self.n_samples_xy[1]],
-            device=self.device)
-        self.x_axis = torch.linspace(self.wf_bounds[0], self.wf_bounds[1],
-                                     self.n_samples_xy[0], device=self.device)
-        self.y_axis = torch.linspace(self.wf_bounds[2], self.wf_bounds[3],
-                                     self.n_samples_xy[1], device=self.device)
+        self.delta = [(self.wf_bounds[1] - self.wf_bounds[0])
+                      / self.n_samples_xy[0],
+                      (self.wf_bounds[3] - self.wf_bounds[2])
+                      / self.n_samples_xy[1]]
+        self.x_axis = torch.linspace(self.wf_bounds[0] + self.delta[0] / 2,
+                                     self.wf_bounds[1], self.n_samples_xy[0],
+                                     device=self.device)
+        self.y_axis = torch.linspace(self.wf_bounds[2] + self.delta[1] / 2,
+                                     self.wf_bounds[3], self.n_samples_xy[1],
+                                     device=self.device)
         self.x_array, self.y_array = torch.meshgrid(self.x_axis, self.y_axis,
                                                     indexing="ij")
         self.coords = torch.stack((self.x_array, self.y_array,
@@ -125,16 +128,17 @@ class Wavefront(torch.nn.Module):
 
         self.field = BilinearInterp(self.x_axis, self.y_axis, self.field
                                     )(new_x_axis, new_y_axis).flatten(1, 2)
-
-        self.n_samples_xy = torch.tensor(
-            [new_x_axis.shape[0], new_y_axis.shape[0]], device=self.device)
+        self.n_samples_xy = [new_x_axis.shape[0], new_y_axis.shape[0]]
         self.n_samples = self.n_samples_xy[0] * self.n_samples_xy[1]
-        self.delta = torch.tensor([new_x_axis[1] - new_x_axis[0],
-                                   new_y_axis[1] - new_y_axis[0]],
-                                  device=self.device)
-        self.wf_bounds = torch.tensor([new_x_axis[0], new_x_axis[-1],
-                                       new_y_axis[0], new_y_axis[-1]],
-                                      device=self.device)
+
+        self.wf_bounds = [new_x_axis[0], new_x_axis[-1],
+                          new_y_axis[0], new_y_axis[-1]]
+
+        self.delta = [(self.wf_bounds[1] - self.wf_bounds[0])
+                      / self.n_samples_xy[0],
+                      (self.wf_bounds[3] - self.wf_bounds[2])
+                      / self.n_samples_xy[1]]
+
         self.x_axis = new_x_axis
         self.y_axis = new_y_axis
         self.x_array, self.y_array = torch.meshgrid(self.x_axis, self.y_axis,
@@ -161,9 +165,10 @@ class Wavefront(torch.nn.Module):
                 new_bounds is not None and new_shape is None):
             raise Exception("Must specify new shape and new bounds if "
                             "changing wavefront dimensions")
+
         # Check if we can just add fields or need to do some interpolation
-        if (torch.equal(self.wf_bounds, wavefront.wf_bounds) and
-            torch.equal(self.n_samples_xy, wavefront.n_samples_xy) and
+        if (self.wf_bounds == wavefront.wf_bounds and
+            self.n_samples_xy == wavefront.n_samples_xy and
                 (new_bounds or new_shape) is None):
             self.field = self.field + wavefront.field
         else:
@@ -188,17 +193,19 @@ class Wavefront(torch.nn.Module):
         :param bounds: New bounds of wavefront [xmin, xmax, ymin, ymax]
         :param n_samples_xy: Samples in wavefront [n_x, n_y]
         """
-        self.wf_bounds = torch.tensor(bounds, device=self.device)
-        self.n_samples_xy = torch.tensor(n_samples_xy, device=self.device)
+        self.wf_bounds = bounds
+        self.n_samples_xy = n_samples_xy
         self.n_samples = n_samples_xy[0] * n_samples_xy[1]
-        self.delta = torch.tensor(
-            [(self.wf_bounds[1] - self.wf_bounds[0]) / self.n_samples_xy[0],
-             (self.wf_bounds[3] - self.wf_bounds[2]) / self.n_samples_xy[1]],
-            device=self.device)
-        self.x_axis = torch.linspace(self.wf_bounds[0], self.wf_bounds[1],
-                                     self.n_samples_xy[0], device=self.device)
-        self.y_axis = torch.linspace(self.wf_bounds[2], self.wf_bounds[3],
-                                     self.n_samples_xy[1], device=self.device)
+        self.delta = [(self.wf_bounds[1] - self.wf_bounds[0])
+                      / self.n_samples_xy[0],
+                      (self.wf_bounds[3] - self.wf_bounds[2])
+                      / self.n_samples_xy[1]]
+        self.x_axis = torch.linspace(self.wf_bounds[0] + self.delta[0] / 2,
+                                     self.wf_bounds[1], self.n_samples_xy[0],
+                                     device=self.device)
+        self.y_axis = torch.linspace(self.wf_bounds[2] + self.delta[1] / 2,
+                                     self.wf_bounds[3], self.n_samples_xy[1],
+                                     device=self.device)
         self.x_array, self.y_array = torch.meshgrid(self.x_axis, self.y_axis,
                                                     indexing="ij")
         self.coords = torch.stack((self.x_array, self.y_array,
@@ -238,14 +245,16 @@ class Wavefront(torch.nn.Module):
         self.wf_bounds = self.wf_bounds_0
         self.n_samples_xy = self.n_samples_xy_0
         self.n_samples = self.n_samples_xy[0] * self.n_samples_xy[1]
-        self.delta = torch.tensor([
-            (self.wf_bounds[1] - self.wf_bounds[0]) / self.n_samples_xy[0],
-            (self.wf_bounds[3] - self.wf_bounds[2]) / self.n_samples_xy[1]],
-            device=self.device)
-        self.x_axis = torch.linspace(self.wf_bounds[0], self.wf_bounds[1],
-                                     self.n_samples_xy[0],  device=self.device)
-        self.y_axis = torch.linspace(self.wf_bounds[2], self.wf_bounds[3],
-                                     self.n_samples_xy[1], device=self.device)
+        self.delta = [(self.wf_bounds[1] - self.wf_bounds[0])
+                      / self.n_samples_xy[0],
+                      (self.wf_bounds[3] - self.wf_bounds[2])
+                      / self.n_samples_xy[1]]
+        self.x_axis = torch.linspace(self.wf_bounds[0] + self.delta[0] / 2,
+                                     self.wf_bounds[1], self.n_samples_xy[0],
+                                     device=self.device)
+        self.y_axis = torch.linspace(self.wf_bounds[2] + self.delta[1] / 2,
+                                     self.wf_bounds[3], self.n_samples_xy[1],
+                                     device=self.device)
         self.x_array, self.y_array = torch.meshgrid(self.x_axis, self.y_axis,
                                                     indexing="ij")
         self.coords = torch.stack((self.x_array, self.y_array,
@@ -260,9 +269,6 @@ class Wavefront(torch.nn.Module):
         :param device: Device to switch to.
         """
         self.device = device
-        self.wf_bounds = self.wf_bounds.to(device)
-        self.n_samples_xy = self.n_samples_xy.to(device)
-        self.delta = self.delta.to(device)
         self.x_axis = self.x_axis.to(device)
         self.y_axis = self.y_axis.to(device)
         self.x_array = self.x_array.to(device)
