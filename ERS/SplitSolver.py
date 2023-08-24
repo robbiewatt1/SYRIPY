@@ -30,6 +30,7 @@ class SplitSolver(torch.nn.Module):
         self.c_light = 0.299792458
         self.split_index = None
         self.wavefront_curve = None
+        self.source_location = None
 
         # Check that wavefront / track device are both the same
         if track.device != wavefront.device:
@@ -148,6 +149,10 @@ class SplitSolver(torch.nn.Module):
                  + (self.track.r[1, peak_index_2] - self.wf_centre[1])**2.
                  + (self.track.r[2, peak_index_2] - self.wf_centre[2])**2.)**0.5
         self.wavefront_curve = [curv_1, curv_2]
+        self.source_location = [self.track.r[:, peak_index_1],
+                                self.track.r[:, peak_index_2]]
+        print(self.wavefront_curve,
+              self.source_location)
 
         # New samples are then evenly spaced over the cumulative distribution
         objective, _ = torch.max(torch.abs(grad_inv_grad), dim=0)
@@ -277,6 +282,8 @@ class SplitSolver(torch.nn.Module):
         wavefront2.reset()
         wavefront1.curv_r = self.wavefront_curve[0]
         wavefront2.curv_r = self.wavefront_curve[1]
+        wavefront1.source_location = self.source_location[0]
+        wavefront2.source_location = self.source_location[1]
 
         # Loop blocks and perform calculation
         block_size = self.wavefront.coords.shape[1] // self.blocks
@@ -318,12 +325,25 @@ class SplitSolver(torch.nn.Module):
             # Solve end points to inf
             if solve_ends_l:
                 f_l = int1[:, :, 0] + 1j * int2[:, :, 0]
+                f_r = int1[:, :, self.split_index*2] + 1j\
+                      * int2[:, :, self.split_index*2]
                 field1 -= (torch.exp(1j * self.wavefront.omega * phase[:, :, 0])
                            * f_l / phase_grad[:, :, 0]) * 1j \
                           / self.wavefront.omega
+                field1 += (torch.exp(1j * self.wavefront.omega
+                                     * phase[:, :, self.split_index*2]) * f_r
+                           / phase_grad[:, :, self.split_index*2]) * 1j \
+                          / self.wavefront.omega
             if solve_ends_r:
+                f_l = int1[:, :, self.split_index*2] + 1j\
+                      * int2[:, :, self.split_index*2]
                 f_r = int1[:, :, -1] + 1j * int2[:, :, -1]
-                field2 += (torch.exp(1j * self.wavefront.omega * phase[:, :, -1])
+                field2 -= (torch.exp(1j * self.wavefront.omega
+                                     * phase[:, :, self.split_index*2])
+                           * f_l / phase_grad[:, :, self.split_index*2]) * 1j \
+                          / self.wavefront.omega
+                field2 += (torch.exp(1j * self.wavefront.omega
+                                     * phase[:, :, -1])
                            * f_r / phase_grad[:, :, -1]) * 1j \
                           / self.wavefront.omega
 
@@ -338,7 +358,7 @@ class SplitSolver(torch.nn.Module):
             # First method doesn't work with vmap so need this
             if self.blocks > 1:
                 wavefront1.field[:, bi:bf] = field1
-                wavefront2.field[:, bi:bf] = field1
+                wavefront2.field[:, bi:bf] = field2
             else:
                 wavefront1.field = field1
                 wavefront2.field = field2
