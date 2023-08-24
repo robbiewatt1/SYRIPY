@@ -64,7 +64,7 @@ class SplitSolver(torch.nn.Module):
                   t_start: Optional[float] = None,
                   t_end: Optional[float] = None,
                   n_sample: Optional[float] = None, flat_power: float = 0.25,
-                  mode: str = "cubic", plot_track: bool = False) -> None:
+                  mode: str = "nn", plot_track: bool = False) -> None:
         """
         Calculates the split index of the track and sets the track samples
         based on large values of objective function obj = |grad(1/grad(g))|.
