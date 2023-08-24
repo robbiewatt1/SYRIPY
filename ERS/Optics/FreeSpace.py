@@ -4,7 +4,7 @@ import numpy as np
 from ..Wavefront import Wavefront
 from .OpticalElement import OpticalElement
 from typing import List, Optional
-from ..Interpolation import BilinearInterp
+
 
 class FreeSpace(OpticalElement):
 
@@ -335,28 +335,30 @@ class FraunhoferProp(FreeSpace):
         wavefront.field = new_field.flatten(1, 2)
 
 
-class TestProp(FreeSpace):
+class FresnelPropQS(FreeSpace):
+    """
+    Propagates the wavefront by some distance using the Fresnel method.
+    The quadratic phase term is subtracted from the wavefront before
+    propagation.
+    """
 
     def __init__(self, z: float, pad: Optional[int] = None,
                  new_shape: Optional[List[int]] = None,
                  new_bounds: Optional[List[float]] = None,
-                 fourier_shape: Optional[List[int]] = None,
-                 fourier_bounds: Optional[List[float]] = None) -> None:
+                 input_upsample: Optional[int] = None) -> None:
         """
         :param z: Propagation distance.
         :param pad: Int setting padding amount. Default is none
-        :param new_shape: The shape of the output wavefront if using
-         CZT transform [nx, ny]
-        :param new_bounds: The bounds of the output wavefront if using
-        CZT transform [x_min, x_max, y_min, y_max].
-        :param fourier_shape: The shape of the fourier plane if using the CZT
-         transform for first transform.
-        param fourier_bounds: The bounds of the fourier plane if using the CZT
-         transform for first transform.
+        :param new_shape: The shape of the output wavefront if using change of
+        shape.
+        :param new_bounds: The bounds of the output wavefront if using change
+        of shape.
+        :param input_upsample: Factor to up-sample input wavefront by. This is
+        done using bilinear interpolation.
         """
+
         super().__init__(z, pad, new_shape, new_bounds)
-        self.fourier_shape = fourier_shape
-        self.fourier_bounds = fourier_bounds
+        self.input_upsample = input_upsample
 
     def propagate(self, wavefront: Wavefront) -> None:
         """
@@ -369,11 +371,17 @@ class TestProp(FreeSpace):
 
         wave_k = wavefront.omega / self.c_light
         lambd = 2.0 * torch.pi / wave_k
-        field = wavefront.field.reshape(2, wavefront.n_samples_xy[0],
-                                        wavefront.n_samples_xy[1])
-        field_scaled = field / torch.exp(
-            1j * wave_k * (wavefront.x_array**2.0 + wavefront.y_array**2.0)
-            / (2 * wavefront.curv_r))
+
+        # Remove quadratic phase term
+        wavefront.field = wavefront.field / torch.exp(1j * wave_k * (
+                (wavefront.coords[0, :] - wavefront.source_location[0])**2.0
+              + (wavefront.coords[1, :] - wavefront.source_location[1])**2.0)
+                                                      / (2 * wavefront.curv_r))
+        if self.input_upsample:
+            wavefront.interpolate_wavefront(fact=self.input_upsample)
+
+        field_scaled = wavefront.field.reshape(2, wavefront.n_samples_xy[0],
+                                               wavefront.n_samples_xy[1])
 
         # Do convolution on reduced part
         field_scaled = fft.fft2(fft.fftshift(field_scaled))
@@ -381,32 +389,120 @@ class TestProp(FreeSpace):
                          d=wavefront.delta[0], device=wavefront.device)
         fy = fft.fftfreq(wavefront.n_samples_xy[1],
                          d=wavefront.delta[1], device=wavefront.device)
+
         fx, fy = torch.meshgrid(fx, fy, indexing="ij")
-
         c = (wavefront.curv_r / (wavefront.curv_r + self.z))
-        kernel = c * torch.exp(-1j * torch.pi * lambd * self.z * c
-                               * (fx**2. + fy**2.))
-        print(kernel.shape)
-        new_field = fft.ifftshift(fft.ifft2(field_scaled * kernel))
+        kernel = torch.exp(-1j * torch.pi * lambd * self.z * c
+                           * (fx**2. + fy**2.))
+        new_field = c * fft.ifftshift(fft.ifft2(field_scaled * kernel))
+        wavefront.field = new_field.flatten(1, 2)
 
-        print((wavefront.curv_r + self.z) / wavefront.curv_r)
-        #update wavefront bounds
+        # Update wavefront bounds
         full_out_size = [(wavefront.wf_bounds[1] - wavefront.wf_bounds[0])
                          * (wavefront.curv_r + self.z) / wavefront.curv_r,
                          (wavefront.wf_bounds[3] - wavefront.wf_bounds[2])
                          * (wavefront.curv_r + self.z) / wavefront.curv_r]
-        new_bounds = [-0.5 * full_out_size[0], 0.5 * full_out_size[0],
-                      -0.5 * full_out_size[1], 0.5 * full_out_size[1]]
-        new_shape = [wavefront.n_samples_xy[0], wavefront.n_samples_xy[1]]
-        wavefront.update_bounds(new_bounds, new_shape)
+        bounds = [-0.5 * full_out_size[0], 0.5 * full_out_size[0],
+                  -0.5 * full_out_size[1], 0.5 * full_out_size[1]]
+        shape = [wavefront.n_samples_xy[0], wavefront.n_samples_xy[1]]
+        wavefront.update_bounds(bounds, shape)
+
+        if self.new_shape and self.new_bounds:
+            new_axes = [torch.linspace(self.new_bounds[0], self.new_bounds[1],
+                                    self.new_shape[0], device=wavefront.device),
+                        torch.linspace(self.new_bounds[2], self.new_bounds[3],
+                                    self.new_shape[1], device=wavefront.device)]
+            wavefront.interpolate_wavefront(new_axes=new_axes)
 
         # Add analytical part back in
-        new_field = new_field * torch.exp(
-            1j * wave_k * (wavefront.x_array**2.0 + wavefront.y_array**2.0)
-            / (2 * (wavefront.curv_r + self.z)))
+        wavefront.field = wavefront.field * torch.exp(1j * wave_k * (
+                (wavefront.coords[0, :] - wavefront.source_location[0])**2.0
+              + (wavefront.coords[1, :] - wavefront.source_location[1])**2.0)
+                            / (2. * (wavefront.curv_r + self.z)))
+        wavefront.field = torch.exp(torch.tensor(1j * wave_k * self.z)) \
+                          * wavefront.field
+        wavefront.z = wavefront.z + self.z
 
-        wavefront.field = (torch.exp(torch.tensor(1j * wave_k * self.z))
-                           * new_field).flatten(1, 2)
+
+class FraunhoferPropQS(FreeSpace):
+    """
+    Propagates the wavefront by some distance using the Fraunhofer method.
+    The quadratic phase term is subtracted from the wavefront before
+    propagation.
+    """
+
+    def __init__(self, z: float, pad: Optional[int] = None,
+                 new_shape: Optional[List[int]] = None,
+                 new_bounds: Optional[List[float]] = None,
+                 input_upsample: Optional[int] = None) -> None:
+        """
+        :param z: Propagation distance.
+        :param pad: Int setting padding amount. Default is none
+        :param new_shape: The shape of the output wavefront if using change of
+        shape.
+        :param new_bounds: The bounds of the output wavefront if using change
+        of shape.
+        :param input_upsample: Factor to up-sample input wavefront by. This is
+        done using bilinear interpolation.
+        """
+
+        super().__init__(z, pad, new_shape, new_bounds)
+        self.input_upsample = input_upsample
+
+    def propagate(self, wavefront: Wavefront) -> None:
+        super().propagate(wavefront)
+
+        wave_k = wavefront.omega / self.c_light
+        lambd = 2.0 * torch.pi / wave_k
+
+        # Remove quadratic phase term
+        wavefront.field = wavefront.field / torch.exp(1j * wave_k * (
+                (wavefront.coords[0, :])**2.0 + (wavefront.coords[1, :])**2.0)
+                                                      / (2 * wavefront.curv_r))
+
+        if self.input_upsample:
+            wavefront.interpolate_wavefront(fact=self.input_upsample)
+
+        field_scaled = wavefront.field.reshape(2, wavefront.n_samples_xy[0],
+                                                  wavefront.n_samples_xy[1])
+
+        # Do convolution on reduced part
+        field_scaled = fft.fft2(fft.fftshift(field_scaled))
+        fx = fft.fftfreq(wavefront.n_samples_xy[0],
+                         d=wavefront.delta[0], device=wavefront.device)
+        fy = fft.fftfreq(wavefront.n_samples_xy[1],
+                         d=wavefront.delta[1], device=wavefront.device)
+
+        fx, fy = torch.meshgrid(fx, fy, indexing="ij")
+        kernel = torch.exp(-1j * torch.pi * lambd * wavefront.curv_r
+                           * (fx**2. + fy**2.)) * wavefront.curv_r / wave_k
+        new_field = fft.ifftshift(fft.ifft2(field_scaled * kernel))
+        wavefront.field = new_field.flatten(1, 2)
+
+        # update wavefront bounds
+        full_out_size = [(wavefront.wf_bounds[1] - wavefront.wf_bounds[0])
+                         * (self.z / wavefront.curv_r),
+                         (wavefront.wf_bounds[3] - wavefront.wf_bounds[2])
+                         * (self.z / wavefront.curv_r)]
+        bounds = [-0.5 * full_out_size[0], 0.5 * full_out_size[0],
+                  -0.5 * full_out_size[1], 0.5 * full_out_size[1]]
+        shape = [wavefront.n_samples_xy[0], wavefront.n_samples_xy[1]]
+        wavefront.update_bounds(bounds, shape)
+
+        if self.new_shape and self.new_bounds:
+            new_axes = [torch.linspace(self.new_bounds[0], self.new_bounds[1],
+                                    self.new_shape[0], device=wavefront.device),
+                        torch.linspace(self.new_bounds[2], self.new_bounds[3],
+                                    self.new_shape[1], device=wavefront.device)]
+            wavefront.interpolate_wavefront(new_axes=new_axes)
+
+        # Add analytical part back in
+        wavefront.field = wavefront.field * torch.exp(1j * wave_k * (
+                (wavefront.coords[0, :])**2.0 + (wavefront.coords[1, :])**2.0)
+                * (self.z - wavefront.curv_r) / (2. * self.z**2.0))
+        wavefront.field = torch.exp(torch.tensor(1j * wave_k * self.z)) \
+                          * wavefront.field
+
         wavefront.z = wavefront.z + self.z
 
 
