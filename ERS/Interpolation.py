@@ -1,6 +1,60 @@
 import torch
 
 
+class NearestInterp:
+    """
+    A class to perform nearest neighbour interpolation on a 2D field. Can be
+    used with batched field. Will return zeros when extrapolating.
+    """
+
+    def __init__(self, x_axis: torch.Tensor, y_axis: torch.Tensor,
+                 field: torch.Tensor) -> None:
+        """
+        :param x_axis: 1D array of x-axis values
+        :param y_axis: 1D array of y-axis values
+        :param field: 2D array of field values
+        """
+        self.x_axis = x_axis
+        self.y_axis = y_axis
+        self.field = field
+
+        # Get batch size
+        if len(field.shape) == 2:
+            self.batch_size = 1
+        else:
+            self.batch_size = field.shape[0]
+
+    def __call__(self, new_x_axis: torch.Tensor, new_y_axis: torch.Tensor
+                 ) -> torch.Tensor:
+        """
+        :param new_x_axis: 1D array of x-axis values to interpolate to
+        :param new_y_axis: 1D array of y-axis values to interpolate to
+        returns: 2D array of interpolated field values
+        """
+
+        # Get sample points
+        x_samples, y_samples = torch.meshgrid(new_x_axis, new_y_axis,
+                                              indexing='ij')
+        x_samples = x_samples.flatten()
+        y_samples = y_samples.flatten()
+
+        # Get the closest indices to the points
+        x_idx = torch.argmin(torch.abs(self.x_axis[:, None] - x_samples), dim=0)
+        y_idx = torch.argmin(torch.abs(self.y_axis[:, None] - y_samples), dim=0)
+
+        interp_bool = torch.logical_and(
+            torch.logical_and(torch.gt(x_idx, 0),
+                              torch.lt(x_idx, self.x_axis.shape[0])),
+            torch.logical_and(torch.gt(y_idx, 0),
+                              torch.lt(y_idx, self.y_axis.shape[0])))
+
+        # Get the field values of the points to interpolate to
+        f_interp = torch.where(interp_bool, self.field[..., x_idx, y_idx], 0)
+
+        return torch.squeeze(f_interp.reshape(self.batch_size, len(new_x_axis),
+                                              len(new_y_axis)))
+
+
 class BilinearInterp:
     """
     A class to perform bilinear interpolation on a 2D field. Can be used with
@@ -39,15 +93,15 @@ class BilinearInterp:
         y_samples = y_samples.flatten()
 
         # Get the indices of the points to interpolate to
-        x_idx = torch.searchsorted(self.x_axis, x_samples, side='right')
-        y_idx = torch.searchsorted(self.y_axis, y_samples, side='right')
+        x_idx = torch.searchsorted(self.x_axis, x_samples, side='left')
+        y_idx = torch.searchsorted(self.y_axis, y_samples, side='left')
 
         # Check if indices are within the range of the axis
         interp_bool = torch.logical_and(
             torch.logical_and(torch.gt(x_idx, 0),
-                              torch.lt(x_idx, self.x_axis.shape[0]+1)),
+                              torch.lt(x_idx, self.x_axis.shape[0])),
             torch.logical_and(torch.gt(y_idx, 0),
-                              torch.lt(y_idx, self.y_axis.shape[0]+1)))
+                              torch.lt(y_idx, self.y_axis.shape[0])))
 
         # Wrap indices back around
         x_low = (x_idx - 1) % self.x_axis.shape[0]
@@ -126,3 +180,5 @@ class CubicInterp:
                 + hh[..., 1, :] * torch.gather(m, dim=-1, index=idx)
                 * dx + hh[..., 2, :] * torch.gather(self.y, dim=-1, index=idx+1)
                 + hh[..., 3, :] * torch.gather(m, dim=-1, index=idx+1) * dx)
+
+
