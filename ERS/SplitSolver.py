@@ -151,8 +151,6 @@ class SplitSolver(torch.nn.Module):
         self.wavefront_curve = [curv_1, curv_2]
         self.source_location = [self.track.r[:, peak_index_1],
                                 self.track.r[:, peak_index_2]]
-        print(self.wavefront_curve,
-              self.source_location)
 
         # New samples are then evenly spaced over the cumulative distribution
         objective, _ = torch.max(torch.abs(grad_inv_grad), dim=0)

@@ -397,6 +397,7 @@ class FresnelPropQS(FreeSpace):
         new_field = c * fft.ifftshift(fft.ifft2(field_scaled * kernel))
         wavefront.field = new_field.flatten(1, 2)
 
+        # TODO this needs to also include the source location
         # Update wavefront bounds
         full_out_size = [(wavefront.wf_bounds[1] - wavefront.wf_bounds[0])
                          * (wavefront.curv_r + self.z) / wavefront.curv_r,
@@ -457,14 +458,15 @@ class FraunhoferPropQS(FreeSpace):
 
         # Remove quadratic phase term
         wavefront.field = wavefront.field / torch.exp(1j * wave_k * (
-                (wavefront.coords[0, :])**2.0 + (wavefront.coords[1, :])**2.0)
+                (wavefront.coords[0, :] - wavefront.source_location[0])**2.0
+              + (wavefront.coords[1, :] - wavefront.source_location[1])**2.0)
                                                       / (2 * wavefront.curv_r))
 
         if self.input_upsample:
             wavefront.interpolate_wavefront(fact=self.input_upsample)
 
         field_scaled = wavefront.field.reshape(2, wavefront.n_samples_xy[0],
-                                                  wavefront.n_samples_xy[1])
+                                               wavefront.n_samples_xy[1])
 
         # Do convolution on reduced part
         field_scaled = fft.fft2(fft.fftshift(field_scaled))
@@ -475,17 +477,19 @@ class FraunhoferPropQS(FreeSpace):
 
         fx, fy = torch.meshgrid(fx, fy, indexing="ij")
         kernel = torch.exp(-1j * torch.pi * lambd * wavefront.curv_r
-                           * (fx**2. + fy**2.)) * wavefront.curv_r / wave_k
+                           * (fx**2. + fy**2.)) * wavefront.curv_r / self.z
         new_field = fft.ifftshift(fft.ifft2(field_scaled * kernel))
         wavefront.field = new_field.flatten(1, 2)
 
         # update wavefront bounds
-        full_out_size = [(wavefront.wf_bounds[1] - wavefront.wf_bounds[0])
-                         * (self.z / wavefront.curv_r),
-                         (wavefront.wf_bounds[3] - wavefront.wf_bounds[2])
-                         * (self.z / wavefront.curv_r)]
-        bounds = [-0.5 * full_out_size[0], 0.5 * full_out_size[0],
-                  -0.5 * full_out_size[1], 0.5 * full_out_size[1]]
+        bounds = [(wavefront.wf_bounds[0] - wavefront.source_location[0])
+                  * (self.z / wavefront.curv_r),
+                  (wavefront.wf_bounds[1] - wavefront.source_location[0])
+                  * (self.z / wavefront.curv_r),
+                  (wavefront.wf_bounds[2] - wavefront.source_location[1])
+                  * (self.z / wavefront.curv_r),
+                  (wavefront.wf_bounds[3] - wavefront.source_location[1])
+                  * (self.z / wavefront.curv_r)]
         shape = [wavefront.n_samples_xy[0], wavefront.n_samples_xy[1]]
         wavefront.update_bounds(bounds, shape)
 
@@ -497,9 +501,13 @@ class FraunhoferPropQS(FreeSpace):
             wavefront.interpolate_wavefront(new_axes=new_axes)
 
         # Add analytical part back in
+        zrz = (self.z - wavefront.curv_r) / self.z
         wavefront.field = wavefront.field * torch.exp(1j * wave_k * (
-                (wavefront.coords[0, :])**2.0 + (wavefront.coords[1, :])**2.0)
-                * (self.z - wavefront.curv_r) / (2. * self.z**2.0))
+                wavefront.coords[0, :] * (zrz * wavefront.coords[0, :]
+                                          - wavefront.source_location[0])
+                + wavefront.coords[1, :] * (zrz * wavefront.coords[1, :]
+                                            - wavefront.source_location[1]))
+                            / (2. * self.z))
         wavefront.field = torch.exp(torch.tensor(1j * wave_k * self.z)) \
                           * wavefront.field
 
