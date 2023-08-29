@@ -17,9 +17,10 @@ class FieldBlock(torch.nn.Module):
         :param length: Length of main part of field.
         :param B0: Field parameter vector [Units are tesla and meters.]
         :param direction: Vector through central axis of magnet [0, 0, 1]
-            by default
-        :param edge_length: Length for field to fall by 10 %. 0 for hard edge or
-            > 0 for soft edge with B0 / (1 + (z / d)**2)**2 dependence.
+         by default
+        :param edge_length: Length for field to fallfrom 90% to 10 %.
+         0 for hard edge or > 0 for soft edge with B0 / (1 + (z / d)**2)**2
+         dependence.
         :param device: Device being used (e.g. cpu / gpu)
         """
         super().__init__()
@@ -32,7 +33,8 @@ class FieldBlock(torch.nn.Module):
         self.length = length
         self.direction = direction  # Not yet implemented
         self.edge_length = edge_length
-        self.edge_scaled = edge_length / (10.**0.5 - 1)**0.5
+        self.edge_scaled = edge_length / 1.23789045853
+        self.constant_length = 0.5 * (length - 1.2689299897 * edge_length)
         self.order = 0
 
     def get_field(self, position: torch.Tensor) -> torch.Tensor:
@@ -83,7 +85,8 @@ class Dipole(FieldBlock):
         :return: Magnetic field vector.
         """
         local_pos = position - self.center_pos
-        zr = torch.atleast_1d(torch.abs(local_pos[..., 2]) - 0.5 * self.length)
+        zr = torch.atleast_1d(torch.abs(local_pos[..., 2])
+                              - self.constant_length)
         inside = torch.where(zr < 0, 1, 0)
         outside = torch.abs(inside - 1)
         return torch.squeeze(inside[:, None] * self.B0 + outside[:, None]

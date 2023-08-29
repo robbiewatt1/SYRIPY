@@ -49,6 +49,7 @@ protected:
     double m_length;                // Length of magnet
     double m_edgeLength;            // Magnet edge length
     double m_edgeScaleFact;         // Edge scaling factor
+    double m_constLengthHalf;       // Half of the length where field is const
 };
 
 

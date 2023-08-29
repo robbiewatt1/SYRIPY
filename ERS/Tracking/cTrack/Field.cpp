@@ -6,7 +6,8 @@ FieldBlock::FieldBlock(const ThreeVector& location,
 m_location(location), m_fieldStrength(fieldStrength), m_length(length), 
     m_edgeLength(edgeLength)
 {
-    m_edgeScaleFact = m_edgeLength / 1.4704685172312868;
+    m_edgeScaleFact = m_edgeLength / 1.23789045853;
+    m_constLengthHalf = 0.5 * (length - 1.2689299897 * m_edgeLength);
 }
 
 double FieldBlock::getEdge(double z) const
@@ -65,7 +66,7 @@ FieldBlock(location, fieldStrength,length, edgeLength)
 ThreeVector Dipole::getField(const ThreeVector& position) const
 {
     ThreeVector local_pos = position - m_location;
-    double zr = std::abs(local_pos[2]) - 0.5 * m_length;
+    double zr = std::abs(local_pos[2]) - m_constLengthHalf;
     if (zr < 0)
     {
         return m_fieldStrength;
