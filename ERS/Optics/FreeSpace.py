@@ -399,12 +399,22 @@ class FresnelPropQS(FreeSpace):
 
         # TODO this needs to also include the source location
         # Update wavefront bounds
-        full_out_size = [(wavefront.wf_bounds[1] - wavefront.wf_bounds[0])
-                         * (wavefront.curv_r + self.z) / wavefront.curv_r,
-                         (wavefront.wf_bounds[3] - wavefront.wf_bounds[2])
-                         * (wavefront.curv_r + self.z) / wavefront.curv_r]
-        bounds = [-0.5 * full_out_size[0], 0.5 * full_out_size[0],
-                  -0.5 * full_out_size[1], 0.5 * full_out_size[1]]
+        bounds = [(wavefront.wf_bounds[0] * (wavefront.curv_r + self.z)
+                   - wavefront.source_location[0] * self.z) / wavefront.curv_r,
+                  (wavefront.wf_bounds[1] * (wavefront.curv_r + self.z)
+                   - wavefront.source_location[0] * self.z) / wavefront.curv_r,
+                  (wavefront.wf_bounds[2] * (wavefront.curv_r + self.z)
+                   - wavefront.source_location[1] * self.z) / wavefront.curv_r,
+                  (wavefront.wf_bounds[3] * (wavefront.curv_r + self.z)
+                   - wavefront.source_location[1] * self.z) / wavefront.curv_r]
+
+
+        #full_out_size = [(wavefront.wf_bounds[1] - wavefront.wf_bounds[0])
+        #                 * (wavefront.curv_r + self.z) / wavefront.curv_r,
+        #                 (wavefront.wf_bounds[3] - wavefront.wf_bounds[2])
+        #                 * (wavefront.curv_r + self.z) / wavefront.curv_r]
+        #bounds = [-0.5 * full_out_size[0], 0.5 * full_out_size[0],
+        #          -0.5 * full_out_size[1], 0.5 * full_out_size[1]]
         shape = [wavefront.n_samples_xy[0], wavefront.n_samples_xy[1]]
         wavefront.update_bounds(bounds, shape)
 
