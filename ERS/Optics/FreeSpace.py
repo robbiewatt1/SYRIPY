@@ -397,7 +397,6 @@ class FresnelPropQS(FreeSpace):
         new_field = c * fft.ifftshift(fft.ifft2(field_scaled * kernel))
         wavefront.field = new_field.flatten(1, 2)
 
-        # TODO this needs to also include the source location
         # Update wavefront bounds
         bounds = [(wavefront.wf_bounds[0] * (wavefront.curv_r + self.z)
                    - wavefront.source_location[0] * self.z) / wavefront.curv_r,
@@ -408,13 +407,6 @@ class FresnelPropQS(FreeSpace):
                   (wavefront.wf_bounds[3] * (wavefront.curv_r + self.z)
                    - wavefront.source_location[1] * self.z) / wavefront.curv_r]
 
-
-        #full_out_size = [(wavefront.wf_bounds[1] - wavefront.wf_bounds[0])
-        #                 * (wavefront.curv_r + self.z) / wavefront.curv_r,
-        #                 (wavefront.wf_bounds[3] - wavefront.wf_bounds[2])
-        #                 * (wavefront.curv_r + self.z) / wavefront.curv_r]
-        #bounds = [-0.5 * full_out_size[0], 0.5 * full_out_size[0],
-        #          -0.5 * full_out_size[1], 0.5 * full_out_size[1]]
         shape = [wavefront.n_samples_xy[0], wavefront.n_samples_xy[1]]
         wavefront.update_bounds(bounds, shape)
 
@@ -514,13 +506,12 @@ class FraunhoferPropQS(FreeSpace):
         zrz = (self.z - wavefront.curv_r) / self.z
         wavefront.field = wavefront.field * torch.exp(1j * wave_k * (
                 wavefront.coords[0, :] * (zrz * wavefront.coords[0, :]
-                                          - wavefront.source_location[0])
+                                          - 2 * wavefront.source_location[0])
                 + wavefront.coords[1, :] * (zrz * wavefront.coords[1, :]
-                                            - wavefront.source_location[1]))
+                                            - 2 * wavefront.source_location[1]))
                             / (2. * self.z))
         wavefront.field = torch.exp(torch.tensor(1j * wave_k * self.z)) \
                           * wavefront.field
-
         wavefront.z = wavefront.z + self.z
 
 
