@@ -291,7 +291,8 @@ class Wavefront(torch.nn.Module):
                        ds_fact: int = 1, axes_lim: Optional[List[float]] = None,
                        lineout: Optional[List[int]] = None,
                        fig_ax: Optional[Tuple[plt.Figure, plt.Axes]] = None,
-                       shading: str = "gouraud"
+                       shading: str = "gouraud",
+                       cmap: str = "viridis"
                        ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Plots the intensity of the wavefront.
@@ -334,13 +335,13 @@ class Wavefront(torch.nn.Module):
                     self.x_axis.cpu().detach().numpy()[::ds_fact],
                     self.y_axis.cpu().detach().numpy()[::ds_fact],
                     np.log10(intensity[::ds_fact, ::ds_fact]),
-                    cmap="jet", shading=shading)
+                    cmap=cmap, shading=shading)
                 fig.colorbar(pcol)
             else:
                 pcol = ax.pcolormesh(
                     self.x_axis.cpu().detach().numpy()[::ds_fact],
                     self.y_axis.cpu().detach().numpy()[::ds_fact],
-                    intensity[::ds_fact, ::ds_fact], cmap="jet",
+                    intensity[::ds_fact, ::ds_fact], cmap=cmap,
                     shading=shading)
                 fig.colorbar(pcol)
 
