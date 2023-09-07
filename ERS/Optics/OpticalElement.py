@@ -49,9 +49,11 @@ class ThinLens(OpticalElement):
                        / (2. * self.focal_length * self.c_light))
         wavefront.field = wavefront.field * tf
 
-        # Update waveront curvature
-        wavefront.curv_r = wavefront.curv_r * self.focal_length / (
-            self.focal_length - wavefront.curv_r)
+        # Update wavefront curvature
+        c = self.focal_length / (self.focal_length - wavefront.curv_r)
+        wavefront.source_location[0] = wavefront.source_location[0] * c
+        wavefront.source_location[1] = wavefront.source_location[0] * c
+        wavefront.curv_r = wavefront.curv_r * c
 
 
 class CircularAperture(OpticalElement):
