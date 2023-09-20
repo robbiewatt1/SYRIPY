@@ -1,6 +1,7 @@
 import torch
 from .cTrack import cTrack
 from typing import Optional, List
+import math
 
 
 class FieldBlock(torch.nn.Module):
@@ -18,7 +19,7 @@ class FieldBlock(torch.nn.Module):
         :param B0: Field parameter vector [Units are tesla and meters.]
         :param direction: Vector through central axis of magnet [0, 0, 1]
          by default
-        :param edge_length: Length for field to fallfrom 90% to 10 %.
+        :param edge_length: Length for field to fall from 90% to 10 %.
          0 for hard edge or > 0 for soft edge with B0 / (1 + (z / d)**2)**2
          dependence.
         :param device: Device being used (e.g. cpu / gpu)
@@ -28,7 +29,6 @@ class FieldBlock(torch.nn.Module):
         me = 9.1093837e-31
         qe = 1.60217663e-19
         self.B0 = (B0 / (me / (qe * 1.e-9))).to(device)
-
         self.center_pos = center_pos.to(device)
         self.length = length
         self.direction = direction  # Not yet implemented
@@ -142,6 +142,9 @@ class FieldContainer(torch.nn.Module):
         :param field_array: A list containing all the defined elements.
         """
         super().__init__()
+
+        # Make sure field array is sorted by position
+        field_array.sort(key=lambda x: x.center_pos[2])
         self.field_array = torch.nn.ModuleList(field_array)
 
     def get_field(self, position: torch.Tensor) -> torch.Tensor:
@@ -154,6 +157,164 @@ class FieldContainer(torch.nn.Module):
         for element in self.field_array:
             field += element.get_field(position)
         return field
+
+    def get_transport_matrix(self, start_z: float, end_z: float, gamma: float
+                             ) -> torch.Tensor:
+        """
+        Calculates the linear transport matrix for a given position. Only works
+        for dispersion in x.
+        :param start_z: Initial position of particle.
+        :param end_z: Final position of particle.
+        :param gamma: Beam design energy.
+        :return: Both x and y beam matrix.
+        """
+
+        # Check element array is not empty
+        if len(self.field_array) == 0:
+            raise ValueError("No elements defined.")
+
+        # Check we are not starting within an element
+        for element in self.field_array:
+            if (abs(start_z - element.center_pos[2]) < 0.5
+                    * element.length):
+                raise ValueError("Starting position is within a magnetic"
+                                 " element.")
+
+        # Find the first element
+        next_element_index = 0
+        for element in self.field_array:
+            if start_z < element.center_pos[2]:
+                break
+            next_element_index += 1
+
+        # Find the last element
+        last_element_index = 0
+        for element in self.field_array:
+            if end_z < element.center_pos[2]:
+                break
+            last_element_index += 1
+
+        current_z = start_z
+        trans_matrix = torch.eye(6)
+        for element in self.field_array[next_element_index:last_element_index]:
+            # Propagate by drift to start of element
+            drift_l = (element.center_pos[2] - 0.5 * element.length) - current_z
+            trans_matrix = torch.matmul(self._drift_matrix(drift_l, gamma),
+                                        trans_matrix)
+            current_z += drift_l
+
+            # Check if end point is within the next element
+            element_l = element.length if current_z + element.length < end_z \
+                else end_z - current_z
+            current_z += element_l
+
+            # Propagate through element
+            if element.order == 1:
+                trans_matrix = torch.matmul(
+                    self._dipole_matrix(element.B0[1], element_l, gamma),
+                    trans_matrix)
+            elif element.order == 2:
+                raise NotImplementedError("Quadrupole not yet implemented.")
+
+        # Propagate by drift to end of element
+        drift_l = end_z - current_z
+        trans_matrix = torch.matmul(self._drift_matrix(drift_l, gamma),
+                                    trans_matrix)
+        current_z += drift_l
+
+        return trans_matrix
+
+    @staticmethod
+    def _drift_matrix(length: float, gamma: float) -> torch.Tensor:
+        """
+        Calculates the drift matrix for a given length.
+        :param length: Length of drift.
+        :param gamma: Beam design energy.
+        :return: Drift matrix.
+        """
+        beta = (1 - gamma**-2)**0.5
+        return torch.tensor([[1., length, 0., 0., 0., 0.],
+                             [0., 1., 0., 0., 0., 0.],
+                             [0., 0., 1., length, 0., 0.],
+                             [0., 0., 0., 1., 0., 0.],
+                             [0., 0., 0., 0., 1., length / (beta * gamma)**2],
+                             [0., 0., 0., 0., 0., 1.]])
+
+    @staticmethod
+    def _dipole_matrix(field: float, length: float, gamma: float
+                       ) -> torch.Tensor:
+        """
+        Calculates the dipole matrix for a given field and length.
+        :param field: Field strength.
+        :param length: Length of dipole.
+        :param gamma: Beam design energy.
+        :return: Dipole matrix.
+        """
+        beta = (1 - gamma**-2)**0.5
+        omega = field / (gamma * beta * 0.299792458)
+        phi = omega * length
+        trans_main = torch.tensor(
+            [[math.cos(phi), math.sin(phi) / omega, 0., 0., 0.,
+              (1. - math.cos(phi)) / (omega * beta)],
+             [-omega * math.sin(phi), math.cos(phi), 0., 0., 0.,
+              math.sin(phi) / beta],
+             [0., 0., 1., length, 0., 0.],
+             [0., 0., 0., 1., 0., 0.],
+             [-math.sin(phi) / beta, - (1. - math.cos(phi)) / (omega * beta),
+              0., 0., 1., length / (beta * gamma)**2 - (phi - math.sin(phi))
+              / (omega * beta**2.)],
+             [0., 0., 0., 0., 0., 1.]])
+        k = -omega * math.tan(phi / 2.)
+        trans_edge = torch.tensor([[1., 0., 0., 0., 0., 0.],
+                                   [-k, 1., 0., 0., 0., 0.],
+                                   [0., 0., 1., 0., 0., 0.],
+                                   [0., 0., k, 1., 0., 0.],
+                                   [0., 0., 0., 0., 1., 0.],
+                                   [0., 0., 0., 0., 0., 1.]])
+        return trans_edge @ trans_main @ trans_edge
+
+    @staticmethod
+    def _quadf_matrix(field: float, length: float, gamma: float
+                      ) -> torch.Tensor:
+        """
+        Calculates the focusing quadrupole matrix for a given field and length.
+        :param field: Field strength.
+        :param length: Length of dipole.
+        :param gamma: Beam design energy.
+        :return: Quadrupole matrix.
+        """
+        beta = (1 - gamma**-2)**0.5
+        omega = (field / (gamma * beta * 0.299792458))**0.5
+        phi = omega * length
+        return torch.tensor(
+            [[math.cos(phi), math.sin(phi) / omega, 0., 0., 0., 0.],
+                [-omega * math.sin(phi), math.cos(phi), 0., 0., 0., 0.],
+                [0., 0., math.cosh(phi), math.sinh(phi) / omega, 0., 0.],
+                [0., 0., omega * math.sinh(phi), math.cosh(phi), 0., 0.],
+                [0., 0., 0., 0., 1., length / (beta * gamma)**2],
+                [0., 0., 0., 0., 0., 1.]])
+
+    @staticmethod
+    def _quadd_matrix(field: float, length: float, gamma: float
+                      ) -> torch.Tensor:
+        """
+        Calculates the defocusing quadrupole matrix for a given field and
+        length.
+        :param field: Field strength.
+        :param length: Length of dipole.
+        :param gamma: Beam design energy.
+        :return: Quadrupole matrix.
+        """
+        beta = (1 - gamma**-2)**0.5
+        omega = (-field / (gamma * beta * 0.299792458))**0.5
+        phi = omega * length
+        return torch.tensor(
+            [[math.cosh(phi), math.sinh(phi) / omega, 0., 0., 0., 0.],
+                [omega * math.sinh(phi), math.cosh(phi), 0., 0., 0., 0.],
+                [0., 0., math.cos(phi), math.sin(phi) / omega, 0., 0.],
+                [0., 0., -omega * math.sin(phi), math.cos(phi), 0., 0.],
+                [0., 0., 0., 0., 1., length / (beta * gamma)**2],
+                [0., 0., 0., 0., 0., 1.]])
 
     @torch.jit.unused
     def gen_c_container(self) -> cTrack.FieldContainer:
