@@ -73,7 +73,7 @@ py::tuple Track::simulateBeam(int nPart)
                m_beamParams[4], m_beamParams[5];
     normal_random_variable y_gen { y_covar };
     Eigen::MatrixXd g_covar(1, 1);
-    g_covar << m_beamParams[6];
+    g_covar << m_beamParams[7];
     normal_random_variable g_gen { g_covar };
 
 
@@ -170,11 +170,11 @@ void Track::setCentralInit(const ThreeVector &position_0,
 void Track::setBeamParams(py::array_t<double>& moments)
 {
     auto m = moments.unchecked<1>();
-    if (m.size() != 7)
+    if (m.size() != 8)
     {
         std::cerr << "Error: wrong number of beam parameters" << std::endl;
     }
-    m_beamParams = std::vector<double>(7);
+    m_beamParams = std::vector<double>(8);
 
     for (int i = 0; i < m.size(); ++i)
     {
