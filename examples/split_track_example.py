@@ -1,6 +1,7 @@
-from ERS import Wavefront, FieldSolver, BeamSolver, SplitSolver
-from ERS.Optics import FraunhoferProp, CircularAperture, OpticsContainer, ThinLens, FresnelProp, TestProp
-from ERS.Tracking import Track, Dipole, FieldContainer
+from SYRIPY import Wavefront, FieldSolver, BeamSolver, SplitSolver
+from SYRIPY.Optics import (FraunhoferProp, CircularAperture, OpticsContainer,
+                           ThinLens, FresnelProp, TestProp)
+from SYRIPY.Tracking import Track, Dipole, FieldContainer
 import torch
 import matplotlib.pyplot as plt
 

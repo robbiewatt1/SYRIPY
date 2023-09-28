@@ -60,7 +60,7 @@ class SplitSolver(torch.nn.Module):
         return self
 
     @torch.jit.ignore
-    def set_track(self, t_split: float, new_samples: int,
+    def set_track(self, new_samples: int, t_split: float,
                   t_start: Optional[float] = None,
                   t_end: Optional[float] = None,
                   n_sample: Optional[float] = None, flat_power: float = 0.25,
@@ -70,8 +70,8 @@ class SplitSolver(torch.nn.Module):
         based on large values of objective function obj = |grad(1/grad(g))|.
         Where g(t) is the phase function. Takes sample along x dimension at y=0.
         Also calculates the radius of curvature of the  wavefront.
-        :param t_split: Time at which the track is split
         :param new_samples: Number of new samples along trajectory.
+        :param t_split: Time at which the track is split
         :param t_start: Start time for integration. If t_start=None start
          time of original track will be used.
         :param t_end: End time for integration. If t_end=None end time of
