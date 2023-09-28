@@ -49,7 +49,7 @@ py::tuple Track::simulateTrack()
     return py::make_tuple(time_p, position_p, beta_p);
 }
 
-py::tuple Track::simulateBeam(int nPart)
+py::tuple Track::simulateBeam(unsigned int nPart)
 {
     int samples = m_time.size();
     std::vector<ThreeVector> position 
