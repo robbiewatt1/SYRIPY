@@ -1,6 +1,6 @@
-from ERS import Wavefront, FieldSolver, BeamSolver
-from ERS.Optics import FraunhoferProp, CircularAperture, OpticsContainer
-from ERS.Tracking import Track, Dipole, FieldContainer
+from SYRIPY import Wavefront, FieldSolver, BeamSolver
+from SYRIPY.Optics import FraunhoferProp, CircularAperture, OpticsContainer
+from SYRIPY.Tracking import Track, Dipole, FieldContainer
 import torch
 import matplotlib.pyplot as plt
 
@@ -19,15 +19,16 @@ d2 = Dipole(torch.tensor([0, 0, 2.0668]), 0.203274830142196,
 field = FieldContainer([d0, d1, d2])
 
 # Define the particle track
-gamma = 339.3 / 0.51099890221              # Lorentz factor
-d0 = torch.tensor([-0e-3, 0e-3, 1])        # Initial direction
-r0 = torch.tensor([-0.1155863873, 0, -1])  # Initial position
-time = torch.linspace(0, 14, 10000)         # Time array samples (ns)
+gamma = torch.tensor([339.3 / 0.51099890221])  # Lorentz factor
+d0 = torch.tensor([-0e-3, 0e-3, 1])            # Initial direction
+r0 = torch.tensor([-0.0913563873, 0, -1])      # Initial position (m)
+time = torch.linspace(0, 14, 1001)             # Time array samples (ns)
 
 # Define tracking class and track (using c++ implementation, faster but can't
 # do gradients)
-track = Track(device=device)
-track.sim_single_c(field, time, r0, d0, gamma)
+track = Track(field, device=device)
+track.set_central_params(r0, d0, gamma)
+track.sim_central_c(time)
 
 # Plot track
 fig, ax = track.plot_track([2, 0])
@@ -49,9 +50,10 @@ optics = OpticsContainer([aper, prop])
 # Define the field solver class
 solver = FieldSolver(wavefnt, track)
 # Set samples along track
-solver.set_dt(250,       # Number of new samples
-              4,         # Start time
-              13)        # End time
+solver.set_track(201,       # Number of new samples
+                 4,         # Start time
+                 13)        # End time
+
 fig, ax = track.plot_track(axes=[2, 0])
 ax.set_xlabel("z (m)")
 ax.set_ylabel("x (m)")
