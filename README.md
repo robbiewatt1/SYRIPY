@@ -17,7 +17,7 @@ parameters, which is useful for many statistical inference methods.
 SYRIPY can be installed using pip
 ```bash
 git clone https://github.com/robbiewatt1/SYRIPY
-pip install ./EdgeRadSolver
+pip install ./SYRIPY
 ```
 
 ## SYRIPY Examples
