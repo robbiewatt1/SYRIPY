@@ -38,7 +38,7 @@ public:
      * direction / position / time / beam param information to be set before
      * running. Updates the m_position / m_momentum / m_beta vectors.
      */
-    py::tuple simulateBeam(unsigned int nPart);
+    py::tuple simulateBeam(int nPart);
 
     /**
      * Sets the time parameters for tracking.
