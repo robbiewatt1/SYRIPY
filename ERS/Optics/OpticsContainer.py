@@ -1,5 +1,6 @@
+import torch
 from ..Wavefront import Wavefront
-from typing import List, Any
+from typing import List
 from .OpticalElement import OpticalElement
 
 
@@ -29,3 +30,13 @@ class OpticsContainer:
         """
         for element in self.element_array:
             element.propagate(wavefront)
+
+    def get_propagation_matrix(self) -> torch.Tensor:
+        """
+        Returns the linear propagation matrix for the element.
+        :return: Propagation matrix.
+        """
+        prop_matrix = torch.eye(6)
+        for element in self.element_array:
+            prop_matrix = element.get_propagation_matrix() @ prop_matrix
+        return prop_matrix

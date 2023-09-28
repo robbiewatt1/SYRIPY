@@ -122,7 +122,7 @@ class Track(torch.nn.Module):
             self.bunch_gamma = self.bunch_gamma.to(device)
         return self
 
-    @torch.jit.export
+    @torch.jit.ignore
     def set_central_params(self, position: torch.Tensor,
                            direction: torch.Tensor, gamma: torch.Tensor
                            ) -> None:
@@ -136,7 +136,7 @@ class Track(torch.nn.Module):
         self.init_d0 = direction
         self.init_gamma = gamma
 
-    @torch.jit.export
+    @torch.jit.ignore
     def set_beam_params(self, beam_moments: torch.Tensor) -> None:
         """
         Sets the beam moments for the track.
@@ -240,7 +240,7 @@ class Track(torch.nn.Module):
     def sim_beam(self, time: torch.Tensor, n_part: Optional[int] = None,
                  bunch_r: Optional[torch.Tensor] = None,
                  bunch_d: Optional[torch.Tensor] = None,
-                 bunch_gamma: Optional[torch.Tensor] = None) -> None:
+                 bunch_g: Optional[torch.Tensor] = None) -> None:
         """
         Models the trajectory of a bunch of particle through a field defined
         by field_container (cpp version should be much-much faster). If bunch_r,
@@ -250,7 +250,7 @@ class Track(torch.nn.Module):
         :param n_part: Number of particles to simulate.
         :param bunch_r: Initial position of tracks.
         :param bunch_d: Initial direction of tracks.
-        :param bunch_gamma: Initial lorentz factor tracks.
+        :param bunch_g: Initial lorentz factor tracks.
         """
 
         if time.shape[0] % 2 == 0:
@@ -264,7 +264,7 @@ class Track(torch.nn.Module):
 
         # if no bunch parameters are provided then use the ones from
         # set_beam_params
-        if bunch_r is None or bunch_d is None or bunch_gamma is None:
+        if bunch_r is None or bunch_d is None or bunch_g is None:
             if self.beam_params is None:
                 raise TypeError("Beam parameters have not been set.")
             else:
@@ -277,7 +277,7 @@ class Track(torch.nn.Module):
         self.bunch_p = torch.zeros((samples, self.time.shape[0], 3),
                                    device=self.device)
         self.bunch_r[:, 0] = bunch_r
-        self.bunch_p[:, 0] = self.c_light * (bunch_gamma[:, None]**2. - 1)**0.5\
+        self.bunch_p[:, 0] = self.c_light * (bunch_g[:, None]**2. - 1)**0.5\
                              * bunch_d / torch.norm(bunch_d, dim=1)[:, None]
 
         for i, t in enumerate(time[:-1]):
@@ -316,10 +316,10 @@ class Track(torch.nn.Module):
 
         self.r = torch.mean(self.bunch_r, dim=0).T
         self.beta = torch.mean(self.bunch_beta, dim=0).T
-        self.gamma = torch.mean(bunch_gamma, dim=0)
+        self.gamma = torch.mean(bunch_g, dim=0)
         self.bunch_r = self.bunch_r.permute((0, 2, 1))
         self.bunch_beta = self.bunch_beta.permute((0, 2, 1))
-        self.bunch_gamma = bunch_gamma.to(self.device)
+        self.bunch_gamma = bunch_g.to(self.device)
 
     @torch.jit.ignore
     def sim_central_c(self, time: torch.Tensor) -> None:

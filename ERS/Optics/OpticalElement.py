@@ -23,6 +23,13 @@ class OpticalElement:
         if self.pad is not None:
             wavefront.pad_wavefront(self.pad)
 
+    def get_propagation_matrix(self) -> torch.Tensor:
+        """
+        Returns the linear propagation matrix for the element.
+        :return: Propagation matrix.
+        """
+        raise NotImplementedError("Base class method called.")
+
 
 class ThinLens(OpticalElement):
     """
@@ -52,8 +59,20 @@ class ThinLens(OpticalElement):
         # Update wavefront curvature
         c = self.focal_length / (self.focal_length - wavefront.curv_r)
         wavefront.source_location[0] = wavefront.source_location[0] * c
-        wavefront.source_location[1] = wavefront.source_location[0] * c
+        wavefront.source_location[1] = wavefront.source_location[1] * c
         wavefront.curv_r = wavefront.curv_r * c
+
+    def get_propagation_matrix(self) -> torch.Tensor:
+        """
+        Returns the linear propagation matrix for the element.
+        :return: Propagation matrix.
+        """
+        return torch.tensor([[1., 0., 0., 0., 0., 0.],
+                             [-1. / self.focal_length, 1., 0., 0., 0., 0.],
+                             [0., 0., 1., 0., 0., 0.],
+                             [0., 0., -1 / self.focal_length, 1., 0., 0.],
+                             [0., 0., 0, 0., 1., 0.],
+                             [0., 0., 0., 0., 0., 1.]])
 
 
 class CircularAperture(OpticalElement):
@@ -78,6 +97,13 @@ class CircularAperture(OpticalElement):
         r = (wavefront.coords[0, :]**2.0 + wavefront.coords[1, :]**2.0)**0.5
         mask = torch.where(r < self.radius, 1, 0)[None, :]
         wavefront.field = wavefront.field * mask
+
+    def get_propagation_matrix(self) -> torch.Tensor:
+        """
+        Returns the linear propagation matrix for the element.
+        :return: Propagation matrix.
+        """
+        return torch.eye(6)
 
 
 class RectangularAperture(OpticalElement):
@@ -105,3 +131,10 @@ class RectangularAperture(OpticalElement):
         mask = torch.where(torch.abs(wavefront.coords[1, :]) < self.size[1],
                            1, 0)[None, :] * mask
         wavefront.field = wavefront.field * mask
+
+    def get_propagation_matrix(self) -> torch.Tensor:
+        """
+        Returns the linear propagation matrix for the element.
+        :return: Propagation matrix.
+        """
+        return torch.eye(6)

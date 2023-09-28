@@ -39,6 +39,18 @@ class FreeSpace(OpticalElement):
         """
         super().propagate(wavefront)
 
+    def get_propagation_matrix(self) -> torch.Tensor:
+        """
+        Returns the linear propagation matrix for the element.
+        :return: Propagation matrix.
+        """
+        return torch.tensor([[1., self.z, 0., 0., 0., 0.],
+                             [0., 1., 0., 0., 0., 0.],
+                             [0., 0., 1., self.z, 0., 0.],
+                             [0., 0., 0., 1., 0., 0.],
+                             [0., 0., 0., 0., 1., 0.],
+                             [0., 0., 0., 0., 0., 1.]])
+
     def _chirp_z_1d(self, x: torch.Tensor, m: int, f_lims: List[float],
                     fs: float, endpoint: bool = True, power_2: bool = True
                     ) -> torch.Tensor:

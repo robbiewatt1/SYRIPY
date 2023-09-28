@@ -1,5 +1,7 @@
 import torch
+import torch.fft as fft
 from .FieldSolver import FieldSolver
+from .SplitSolver import SplitSolver
 from .Wavefront import Wavefront
 from .Tracking import Track
 from .Optics import OpticsContainer
@@ -8,79 +10,83 @@ from typing import Optional, Dict
 
 class BeamSolver:
     """
-    Class for calculating the intensity of a beam of particles from coherent or
-    incoherent radiation
+    Class for calculating the intensity of a beam of particles using either a
+    convolution or monte carlo method.
     """
 
     def __init__(self, wavefront: Wavefront, track: Track,
-                 optics_container: Optional[OpticsContainer] = None,
-                 dt_args: Optional[Dict[str, int]] = None,
-                 compile_solver: bool = False, blocks: int = 1,
-                 batch_solve: int = 1, solve_ends: bool = True) -> None:
+                 optics: OpticsContainer = None, use_split_solver: bool = False,
+                 solver_args: Optional[Dict[str, int]] = None) -> None:
         """
         :param wavefront: Instance of Wavefront class
         :param track: Instance of Track class (should already have calculated
          single and bunch tracks)
-        :param optics_container: Instance of OpticsContainer class.
-        :param dt_args: Dictionary of argument for automatic setting of time
-         samples. If none default track is used.
-        :param compile_solver: If true, the solver class will be compiled with
-         torch.jit.script. This can speed the calculation up by ~ 2x.
-        :param blocks: Number of blocks to split calculation. Increasing this
-         will reduce memory but slow calculation
-        :param batch_solve: If larger than 1 then the solver will be batched,
-         improving speed but increasing memory.
-        :param solve_ends: If true the integration is extended to +/- inf using
-         an asymptotic expansion.
+        :param optics: Instance of OpticsContainer class.
+        :param solver_args: Dictionary of argument to set track samples, see
+         solver.set_track() for details.
         """
-
-        if track.r is None or track.bunch_r is None:
-            raise Exception("Track central / bunch trajectories have not been"
-                            " set. Please run  sim_single_c and sim_bunch_c"
-                            " before solving field")
-        if batch_solve > 1 and blocks > 1:
-            raise Exception("Can't have blocks > 1 if performing simulations in"
-                            " batches.")
 
         self.track = track
         self.wavefront = wavefront
-        self.optics_container = optics_container
-        self.batch_solve = batch_solve
-        self.solver = FieldSolver(wavefront, track)
-        self.solver.set_dt(**dt_args, set_bunch=True)
+        self.optics = optics
 
-        if compile_solver:
-            self.solver = torch.compile(self.solver, mode="reduce-overhead")
+        # Solve for central track
+        if use_split_solver:
+            self.solver = SplitSolver(self.wavefront, self.track)
+            self.solver.set_dt(**solver_args)
 
-        # Define the solver function, depends on if we are batching or using
-        # optics propagating.
-        if batch_solve > 1:  # Multi solver case
-            if self.optics_container is not None:  # Solver uses optics
-                def solver_func(index):
-                    wvfrt = self.solver.solve_field(1, solve_ends, True, index)
-                    self.optics_container.propagate(wvfrt)
-                    return wvfrt.get_intensity()
-            else:  # No optics solver
-                def solver_func(index):
-                    wvfrt = self.solver.solve_field(1, solve_ends, True, index)
-                    return wvfrt.get_intensity()
-            self.solver_func = torch.func.vmap(solver_func)
+            wavefront1, wavefront2 = self.solver.solve_field()
+            if optics is not None:
+                self.optics.propagate(wavefront1)
+                self.optics.propagate(wavefront2)
+            wavefront1.add_field(wavefront2)
+            self.wavefront = wavefront1
+        else:
+            self.solver = FieldSolver(self.wavefront, self.track)
+            self.solver.set_dt(**solver_args)
 
-        else:  # No batch solver case
-            if self.optics_container is not None:  # Solver uses optics
-                def solver_func(index):
-                    wvfrt = self.solver.solve_field(blocks, solve_ends, True,
-                                                    index)
-                    self.optics_container.propagate(wvfrt)
-                    return wvfrt.get_intensity()
-            else:  # No optics solver
-                def solver_func(index):
-                    wvfrt = self.solver.solve_field(blocks, solve_ends, True,
-                                                    index)
-                    return wvfrt.get_intensity()
-            self.solver_func = solver_func
+            wavefront = self.solver.solve_field()
+            if optics is not None:
+                self.optics.propagate(wavefront)
+            self.wavefront = wavefront
 
-    def solve_incoherent(self, n_part: Optional[int] = None, n_device: int = 1
+    def convolve_beam(self) -> torch.Tensor:
+        """
+        Calculates the intensity of incoherent radiation from multiple electrons
+        using a convolution method.
+        :return: The intensity as a real 2d torch array
+        """
+
+        # First calculate blurring kernel
+        electron_transport = self.track.field_container.get_transport_matrix(
+            self.track.r[2, 0], self.wavefront.source_location[2],
+            self.track.gamma)
+        photon_transport = self.optics.get_propagation_matrix()
+        transport = photon_transport @ electron_transport
+        beam_matrix = self.track.get_beam_matrix()
+        beam_matrix = transport @ beam_matrix @ transport.T
+        sigma_x, sigma_y = beam_matrix[0, 0]**0.5, beam_matrix[2, 2]**0.5
+
+        # Now perform convolution
+        intensity = self.wavefront.get_intensity()
+
+        # Pad the wavefront to avoid edge effects
+        pad_size_x = int(5 * sigma_x / self.wavefront.delta[0])
+        pad_size_y = int(5 * sigma_y / self.wavefront.delta[1])
+        intensity = torch.nn.functional.pad(
+            intensity, (pad_size_x, pad_size_x, pad_size_y, pad_size_y))
+        intensity_k = fft.fft2(fft.fftshift(intensity))
+
+        # Calculate the blurring kernel
+        fx = fft.fftfreq(self.wavefront.n_samples_xy[0],
+                         self.wavefront.delta[0], device=self.wavefront.device)
+        fy = fft.fftfreq(self.wavefront.n_samples_xy[1],
+                         self.wavefront.delta[1], device=self.wavefront.device)
+        fx, fy = torch.meshgrid(fx, fy, indexing="ij")
+        kernel = torch.exp(-(fx * sigma_x)**2. + (fy * sigma_y)**2.)
+        return fft.ifftshift(fft.ifft2(intensity_k * kernel)).real
+
+    def monte_carlo_beam(self, n_part: Optional[int] = None, n_device: int = 1
                          ) -> torch.Tensor:
         """
         Calculates the intensity of incoherent radiation from multiple electrons
@@ -93,6 +99,7 @@ class BeamSolver:
         :return: The intensity as a real 2d torch array
         """
 
+        '''
         if n_part > self.track.bunch_r.shape[0]:
             raise Exception("Number of particles must be less than or equal "
                             "to the number of tracks simulated.")
@@ -163,6 +170,6 @@ class BeamSolver:
             """
             raise Exception("Multi GPU case hasn't been implemented yet")
         return intensity_total
+        '''
+        raise Exception("Monte Carlo solver hasn't been implemented yet")
 
-    def solve_coherent(self, n_part):
-        pass
