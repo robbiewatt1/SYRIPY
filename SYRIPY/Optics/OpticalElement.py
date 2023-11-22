@@ -58,8 +58,7 @@ class ThinLens(OpticalElement):
 
         # Update wavefront curvature
         c = self.focal_length / (self.focal_length - wavefront.curv_r)
-        wavefront.source_location[0] = wavefront.source_location[0] * c
-        wavefront.source_location[1] = wavefront.source_location[1] * c
+        wavefront.source_location = wavefront.source_location * c
         wavefront.curv_r = wavefront.curv_r * c
 
     def get_propagation_matrix(self) -> torch.Tensor:

@@ -410,15 +410,15 @@ class FresnelPropQS(FreeSpace):
         wavefront.field = new_field.flatten(1, 2)
 
         # Update wavefront bounds
-        bounds = [(wavefront.wf_bounds[0] * (wavefront.curv_r + self.z)
-                   - wavefront.source_location[0] * self.z) / wavefront.curv_r,
-                  (wavefront.wf_bounds[1] * (wavefront.curv_r + self.z)
-                   - wavefront.source_location[0] * self.z) / wavefront.curv_r,
-                  (wavefront.wf_bounds[2] * (wavefront.curv_r + self.z)
-                   - wavefront.source_location[1] * self.z) / wavefront.curv_r,
-                  (wavefront.wf_bounds[3] * (wavefront.curv_r + self.z)
-                   - wavefront.source_location[1] * self.z) / wavefront.curv_r]
-
+        curv_r = wavefront.curv_r.item()
+        bounds = [(wavefront.wf_bounds[0] * (curv_r + self.z)
+                   - wavefront.source_location[0].item() * self.z) / curv_r,
+                  (wavefront.wf_bounds[1] * (curv_r + self.z)
+                   - wavefront.source_location[0].item() * self.z) / curv_r,
+                  (wavefront.wf_bounds[2] * (curv_r + self.z)
+                   - wavefront.source_location[1].item() * self.z) / curv_r,
+                  (wavefront.wf_bounds[3] * (curv_r + self.z)
+                   - wavefront.source_location[1].item() * self.z) / curv_r]
         shape = [wavefront.n_samples_xy[0], wavefront.n_samples_xy[1]]
         wavefront.update_bounds(bounds, shape)
 
@@ -496,14 +496,15 @@ class FraunhoferPropQS(FreeSpace):
         wavefront.field = new_field.flatten(1, 2)
 
         # update wavefront bounds
-        bounds = [(wavefront.wf_bounds[0] - wavefront.source_location[0])
-                  * (self.z / wavefront.curv_r),
-                  (wavefront.wf_bounds[1] - wavefront.source_location[0])
-                  * (self.z / wavefront.curv_r),
-                  (wavefront.wf_bounds[2] - wavefront.source_location[1])
-                  * (self.z / wavefront.curv_r),
-                  (wavefront.wf_bounds[3] - wavefront.source_location[1])
-                  * (self.z / wavefront.curv_r)]
+        curv_r = wavefront.curv_r.item()
+        bounds = [(wavefront.wf_bounds[0] - wavefront.source_location[0].item())
+                  * (self.z / curv_r),
+                  (wavefront.wf_bounds[1] - wavefront.source_location[0].item())
+                  * (self.z / curv_r),
+                  (wavefront.wf_bounds[2] - wavefront.source_location[1].item())
+                  * (self.z / curv_r),
+                  (wavefront.wf_bounds[3] - wavefront.source_location[1].item())
+                  * (self.z / curv_r)]
         shape = [wavefront.n_samples_xy[0], wavefront.n_samples_xy[1]]
         wavefront.update_bounds(bounds, shape)
 
