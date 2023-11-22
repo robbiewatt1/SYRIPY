@@ -31,7 +31,7 @@ class Wavefront(torch.nn.Module):
         self.wf_bounds = wf_bounds
         self.n_samples_xy = n_samples_xy
         self.dims = dims
-        self.curv_r = curv_r
+        self.curv_r = torch.tensor([curv_r])
         self.source_location = source_location
         self.device = device
         self.n_samples = n_samples_xy[0] * n_samples_xy[1]

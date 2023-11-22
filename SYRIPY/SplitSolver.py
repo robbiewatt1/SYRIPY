@@ -108,7 +108,6 @@ class SplitSolver(torch.nn.Module):
             t_start = self.track.time[0]
         if t_end is None:
             t_end = self.track.time[-1]
-
         t_0 = torch.argmin(torch.abs(self.track.time - t_start))
         t_1 = torch.argmin(torch.abs(self.track.time - t_end)) + 1
         split_index = torch.argmin(torch.abs(self.track.time[t_0:t_1]
