@@ -170,12 +170,22 @@ class Track(torch.nn.Module):
         return self.beam_matrix
 
     @torch.jit.export
-    def sim_central(self, time: torch.Tensor) -> None:
+    def sim_central(self, time: torch.Tensor, use_gpu=False) -> None:
         """
         Models the trajectory of a single particle through a field defined
         by field_container
         :param time: Array of time samples.
+        :param use_gpu: Bool if true then use gpu for calculation.
         """
+
+        if use_gpu:
+            device = self.device
+            self.field_container.switch_device(device)
+        else:
+            device = torch.device("cpu")
+            self.field_container.switch_device(device)
+
+        time = time.to(device)
 
         if self.field_container is None:
             raise TypeError("Field container value is None.")
@@ -189,12 +199,12 @@ class Track(torch.nn.Module):
                   f" requiring an odd number of time steps for high accuracy."
                   f" Increasing steps to {time.shape[0] + 1}")
             self.time = torch.linspace(time[0], time[-1], time.shape[0] + 1,
-                                       device=time.device)
+                                       device=device)
         else:
             self.time = time
 
-        self.r = torch.zeros((self.time.shape[0], 3), device=self.device)
-        self.p = torch.zeros((self.time.shape[0], 3), device=self.device)
+        self.r = torch.zeros((self.time.shape[0], 3), device=device)
+        self.p = torch.zeros((self.time.shape[0], 3), device=device)
         self.gamma = self.init_gamma
 
         self.r[0] = self.init_r0
@@ -232,6 +242,7 @@ class Track(torch.nn.Module):
         self.beta = self.p / (self.c_light**2.0
                               + torch.sum(self.p * self.p, dim=1)[:, None])**0.5
         # Transpose for field solver and switch device
+        self.gamma = self.gamma.to(self.device)
         self.r = self.r.to(self.device).T
         self.beta = self.beta.to(self.device).T
         self.time = self.time.to(self.device)
@@ -240,7 +251,8 @@ class Track(torch.nn.Module):
     def sim_beam(self, time: torch.Tensor, n_part: Optional[int] = None,
                  bunch_r: Optional[torch.Tensor] = None,
                  bunch_d: Optional[torch.Tensor] = None,
-                 bunch_g: Optional[torch.Tensor] = None) -> None:
+                 bunch_g: Optional[torch.Tensor] = None,
+                 use_gpu=False) -> None:
         """
         Models the trajectory of a bunch of particle through a field defined
         by field_container (cpp version should be much-much faster). If bunch_r,
@@ -251,17 +263,23 @@ class Track(torch.nn.Module):
         :param bunch_r: Initial position of tracks.
         :param bunch_d: Initial direction of tracks.
         :param bunch_g: Initial lorentz factor tracks.
+        :param use_gpu: Bool if true then use gpu for calculation.
         """
+
+        if use_gpu:
+            device = self.device
+            self.field_container.switch_device(device)
+        else:
+            device = torch.device("cpu")
+            self.field_container.switch_device(device)
+        self.time = time.to(device)
 
         if time.shape[0] % 2 == 0:
             print(f"Warning: Filon integrator is a Simpson's based method"
                   f" requiring an odd number of time steps for high accuracy."
                   f" Increasing steps to {time.shape[0] + 1}")
             self.time = torch.linspace(time[0], time[-1], time.shape[0] + 1,
-                                       device=self.device)
-        else:
-            self.time = time.to(self.device)
-
+                                       device=device)
         # if no bunch parameters are provided then use the ones from
         # set_beam_params
         if bunch_r is None or bunch_d is None or bunch_g is None:
@@ -273,9 +291,9 @@ class Track(torch.nn.Module):
         # make sure all arrays are the same shape
         samples = bunch_r.shape[0]
         self.bunch_r = torch.zeros((samples, self.time.shape[0], 3),
-                                   device=self.device)
+                                   device=device)
         self.bunch_p = torch.zeros((samples, self.time.shape[0], 3),
-                                   device=self.device)
+                                   device=device)
         self.bunch_r[:, 0] = bunch_r
         self.bunch_p[:, 0] = self.c_light * (bunch_g[:, None]**2. - 1)**0.5\
                              * bunch_d / torch.norm(bunch_d, dim=1)[:, None]
@@ -314,11 +332,11 @@ class Track(torch.nn.Module):
         self.bunch_beta = self.bunch_p / (self.c_light**2.0 + torch.sum(
             self.bunch_p * self.bunch_p, dim=-1)[..., None])**0.5
 
-        self.r = torch.mean(self.bunch_r, dim=0).T
-        self.beta = torch.mean(self.bunch_beta, dim=0).T
-        self.gamma = torch.mean(bunch_g, dim=0)
-        self.bunch_r = self.bunch_r.permute((0, 2, 1))
-        self.bunch_beta = self.bunch_beta.permute((0, 2, 1))
+        self.r = torch.mean(self.bunch_r, dim=0).to(self.device).T
+        self.beta = torch.mean(self.bunch_beta, dim=0).to(self.device).T
+        self.gamma = torch.mean(bunch_g, dim=0).to(self.device)
+        self.bunch_r = self.bunch_r.permute((0, 2, 1)).to(self.device)
+        self.bunch_beta = self.bunch_beta.permute((0, 2, 1)).to(self.device)
         self.bunch_gamma = bunch_g.to(self.device)
 
     @torch.jit.ignore
