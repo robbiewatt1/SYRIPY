@@ -11,8 +11,7 @@ class FieldBlock(torch.nn.Module):
     # TODO need to add the direction of the magnet
     def __init__(self, center_pos: torch.Tensor, length: float,
                  B0: torch.Tensor, direction: Optional[torch.Tensor] = None,
-                 edge_length: float = 0., device: Optional[torch.device] = None
-                 ) -> None:
+                 edge_length: float = 0.) -> None:
         """
         :param center_pos: Central position of the magnet.
         :param length: Length of main part of field.
@@ -22,14 +21,13 @@ class FieldBlock(torch.nn.Module):
         :param edge_length: Length for field to fall from 90% to 10 %.
          0 for hard edge or > 0 for soft edge with B0 / (1 + (z / d)**2)**2
          dependence.
-        :param device: Device being used (e.g. cpu / gpu)
         """
         super().__init__()
 
         me = 9.1093837e-31
         qe = 1.60217663e-19
-        self.B0 = (B0 / (me / (qe * 1.e-9))).to(device)
-        self.center_pos = center_pos.to(device)
+        self.B0 = B0 / (me / (qe * 1.e-9))
+        self.center_pos = center_pos
         self.length = length
         self.direction = direction  # Not yet implemented
         self.edge_length = edge_length
@@ -54,6 +52,14 @@ class FieldBlock(torch.nn.Module):
         """
         return b[None] / (1 + (z[:, None] / self.edge_scaled)**2.)**2.
 
+    def switch_device(self, device):
+        """
+        Switches the device of the field.
+        :param device: Device to switch to.
+        """
+        self.B0 = self.B0.to(device)
+        self.center_pos = self.center_pos.to(device)
+
 
 class Dipole(FieldBlock):
     """
@@ -63,8 +69,7 @@ class Dipole(FieldBlock):
 
     def __init__(self, center_pos: torch.Tensor, length: float,
                  B0: torch.Tensor, direction: Optional[torch.Tensor] = None,
-                 edge_length: float = 0., device: Optional[torch.device] = None
-                 ) -> None:
+                 edge_length: float = 0.) -> None:
         """
         :param center_pos: Central position of the magnet.
         :param length: Length of main part of field.
@@ -73,9 +78,8 @@ class Dipole(FieldBlock):
          by default
         :param edge_length: Length for field to fall by 10 %. 0 for hard edge or
          > 0 for soft edge with B0 / (1 + (z / d)**2)**2 dependence.
-        :param device: Device being used (e.g. cpu / gpu)
         """
-        super().__init__(center_pos, length, B0, direction, edge_length, device)
+        super().__init__(center_pos, length, B0, direction, edge_length)
         self.order = 1
 
     def get_field(self, position: torch.Tensor) -> torch.Tensor:
@@ -101,8 +105,7 @@ class Quadrupole(FieldBlock):
 
     def __init__(self, center_pos: torch.Tensor, length: float,
                  gradB: torch.Tensor, direction: Optional[torch.Tensor] = None,
-                 edge_length: float = 0., device: Optional[torch.device] = None
-                 ) -> None:
+                 edge_length: float = 0.) -> None:
         """
         :param center_pos: Central position of the magnet.
         :param length: Length of main part of field.
@@ -111,10 +114,9 @@ class Quadrupole(FieldBlock):
             by default.
         :param edge_length: Length for field to fall by 10 %. 0 for hard edge or
             > 0 for soft edge with B0 / (1 + (z / d)**2)**2 dependence.
-        :param device: Device being used (e.g. cpu / gpu)
         """
         super().__init__(center_pos, length, gradB, direction, edge_length,
-                         device)
+                         )
 
     def get_field(self, position: torch.Tensor) -> torch.Tensor:
         """
@@ -157,6 +159,14 @@ class FieldContainer(torch.nn.Module):
         for element in self.field_array:
             field += element.get_field(position)
         return field
+
+    def switch_device(self, device):
+        """
+        Switches the device of the field.
+        :param device: Device to switch to.
+        """
+        for element in self.field_array:
+            element.switch_device(device)
 
     def get_transport_matrix(self, start_z: float, end_z: float, gamma: float
                              ) -> torch.Tensor:
