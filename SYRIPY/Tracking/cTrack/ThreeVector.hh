@@ -99,7 +99,6 @@ public:
 		return dir;
 	}
 
-
 	// Returns the matrix required to rotate the vector onto the second
 	ThreeMatrix RotateToAxis(const ThreeVector& axis) const
 	{

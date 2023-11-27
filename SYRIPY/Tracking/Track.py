@@ -343,7 +343,9 @@ class Track(torch.nn.Module):
     def sim_central_c(self, time: torch.Tensor) -> None:
         """
         Models the trajectory of a single particle through a field defined
-        by field_container is cpp version (should be much-much faster)
+        by field_container is cpp version (should be much-much faster).
+        Implementation is defined when installing. Can either use pure c++ or
+        libtorch c++.
         :param time: Array of times
         """
 

@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 # inference. Pyro, Seaborn and Pandas are not part of the package requirements
 # and need to be installed separately.
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
 
 class ForwardModel:
@@ -145,11 +145,11 @@ if __name__ == "__main__":
 
     # Model a beam that is 1.2 mrad off axis with 300urad divergence and
     # normalise
-    intensity = forward_model.forward(0.6e-3, 0.1e-3)
+    intensity = forward_model.forward(0.5e-3, 0.15e-3)
     intensity = intensity / torch.trapz(intensity)
 
     # Add some noise to the data
-    intensity = torch.normal(intensity, 0.0003).to("cpu")
+    intensity = torch.normal(intensity, 0.01).to("cpu")
 
     # Check what the mock data looks like
     fig, ax = plt.subplots(figsize=(4, 3))
