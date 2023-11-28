@@ -33,6 +33,12 @@ public:
         }
 	}
 
+	// Constructor for consisency with torch
+	ThreeVector(std::initializer_list<double> initializerList, bool requires_grad)
+	{
+		throw std::runtime_error("Error: Can't set requires_grad. Must install SYRIPY with libtorch support.");
+	}
+
 	// Copy constructor
 	ThreeVector(const ThreeVector &vector)
 	{
@@ -127,6 +133,12 @@ public:
     {
         return m_data[index];
     }
+
+	template<class T>
+	T* data_ptr()
+	{
+		return m_data;
+	}
 
 	// Copy vector to new vector
 	ThreeVector& operator=(const ThreeVector &vector)

@@ -17,6 +17,11 @@ public:
 
     TorchVector(Tensor tensor) : Tensor(std::move(tensor)) {}
 
+    TorchVector(Tensor tensor, bool requires_grad)
+    {
+        *this = Tensor(std::move(tensor));
+        this->set_requires_grad(requires_grad);
+    }
 
     // Constructor for consisency with torch. just takes an initializer list and passes it to the torch::tensor init
     TorchVector(std::initializer_list<float> initializerList)

@@ -3,6 +3,8 @@
 
 #include "Field.hh"
 #include <vector>
+#include <pybind11/numpy.h>
+
 
 #ifdef USE_TORCH
     #include "TorchVector.hh"
@@ -16,6 +18,7 @@
     namespace math = std;
 #endif
 
+namespace py = pybind11;
 
 /*
 Class to track a particle through the magnetic setup. The base vector class can
@@ -37,7 +40,16 @@ public:
      * track data.
      * @return Tuple of torch (time, position, beta) 
      */
-    void simulateTrack();
+    py::tuple simulateTrack();
+
+    /**
+     * Function to calculate graident of track. Requires forward track to be run
+     * first.
+     * @return Tuple of torch (position_grad, beta_grad) 
+     */
+    py::tuple backwardTrack(std::vector<vectorType> &grad_outputs);
+
+    py::tuple test();
 
 
     /**
@@ -122,6 +134,11 @@ private:
     // Initial single conditions
     vectorType m_initMomemtum;
     vectorType m_initPosition;
+
+    // Saved track data
+    std::vector<vectorType> m_position;
+    std::vector<vectorType> m_momentum;
+    std::vector<vectorType> m_beta;
 
     // Initial beam conditions
     std::vector<vectorType> m_initBeamMomemtum;
