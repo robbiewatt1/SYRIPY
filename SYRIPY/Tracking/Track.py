@@ -338,6 +338,8 @@ class Track(torch.nn.Module):
         self.bunch_r = self.bunch_r.permute((0, 2, 1)).to(self.device)
         self.bunch_beta = self.bunch_beta.permute((0, 2, 1)).to(self.device)
         self.bunch_gamma = bunch_g.to(self.device)
+        self.time = self.time.to(self.device)
+
 
     @torch.jit.ignore
     def sim_central_c(self, time: torch.Tensor) -> None:
