@@ -1,10 +1,10 @@
-#ifndef PTTRACK_HH
-#define PTTRACK_HH
+#ifndef TRACK_HH
+#define TRACK_HH
 
 #include "Field.hh"
 #include <vector>
-#include <pybind11/numpy.h>
 
+#include <pybind11/numpy.h>
 
 #ifdef USE_TORCH
     #include "TorchVector.hh"
@@ -26,13 +26,13 @@ be eithe torch or my simple 3 vector.
 */
 
 
-class PtTrack
+class Track
 {
 public:
     /* Defult constructor which sets setup switches*/
-    PtTrack(){m_timeSet = false; m_initSet = false;};
+    Track(){m_timeSet = false; m_initSet = false;};
     
-    ~PtTrack(){};
+    ~Track(){};
 
     /**
      * Main function for simulating the track of a single electron. Requires the
@@ -47,10 +47,8 @@ public:
      * first.
      * @return Tuple of torch (position_grad, beta_grad) 
      */
-    py::tuple backwardTrack(std::vector<vectorType> &grad_outputs);
-
-    py::tuple test();
-
+    py::tuple backwardTrack(py::array_t<scalarType> &positionGrad,
+        py::array_t<scalarType> &betaGrad);
 
     /**
      * Main function for simulating multiple electrons (i.e. beam). Requires the

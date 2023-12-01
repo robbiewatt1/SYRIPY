@@ -1,5 +1,6 @@
 #include <pybind11/pybind11.h>
-#include "PtTrack.hh"
+#include <pybind11/stl.h>
+#include "Track.hh"
 #include "Field.hh"
 
 #ifdef USE_TORCH
@@ -20,20 +21,21 @@ namespace py = pybind11;
 
 PYBIND11_MODULE(cTrack, module)
 {
-    py::class_<PtTrack>(module, "PtTrack")
+    py::class_<Track>(module, "Track")
         .def(py::init<>())
-        .def("simulateTrack", &PtTrack::simulateTrack, "Main function to"
+        .def("simulateTrack", &Track::simulateTrack, "Main function to"
             "simulate the track of a single electron.")
-        .def("test", &PtTrack::test, "test function")
-        .def("simulateBeam", &PtTrack::simulateBeam, "Main function to"
+        .def("backwardTrack", &Track::backwardTrack, "Function for performing"
+            "backpropagation of the track.")
+        .def("simulateBeam", &Track::simulateBeam, "Main function to"
             "simulate a beam of particles.")
-        .def("setTime", &PtTrack::setTime, "Sets the time parameters for "
+        .def("setTime", &Track::setTime, "Sets the time parameters for "
         	"the simulation")
-        .def("setCentralInit", &PtTrack::setCentralInit, "Sets the initial parameters fo r"
+        .def("setCentralInit", &Track::setCentralInit, "Sets the initial parameters fo r"
         	"the simulation")
-        .def("setBeamInit", &PtTrack::setBeamInit, "Sets the beam parameters."
+        .def("setBeamInit", &Track::setBeamInit, "Sets the beam parameters."
             "for the simulation")
-        .def("setField", &PtTrack::setField, "Sets the field container for the"
+        .def("setField", &Track::setField, "Sets the field container for the"
             "solver.");
 
     py::class_<FieldContainer>(module, "FieldContainer")
@@ -42,6 +44,6 @@ PYBIND11_MODULE(cTrack, module)
             "to the container.");
 
     py::class_<vectorType>(module, "ThreeVector")
-        .def(py::init<std::initializer_list<scalarType>>())
-        .def(py::init<std::initializer_list<scalarType>, bool>());
+        .def(py::init<py::list>())
+        .def(py::init<py::list, bool>());
 }

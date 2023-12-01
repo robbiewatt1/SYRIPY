@@ -4,6 +4,10 @@
 #include <iostream>
 #include <cmath>
 #include <cassert>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+namespace py = pybind11;
 
 
 class ThreeVector
@@ -33,11 +37,15 @@ public:
         }
 	}
 
-	// Constructor for consisency with torch
-	ThreeVector(std::initializer_list<double> initializerList, bool requires_grad)
-	{
-		throw std::runtime_error("Error: Can't set requires_grad. Must install SYRIPY with libtorch support.");
-	}
+    // Constructor for consisency with torch. just takes an initializer list and passes it to the torch::tensor init
+    ThreeVector(const py::list& initializerList, bool requires_grad=true)
+    {
+        assert (initializerList.size() == 3);
+		auto vec = initializerList.cast<std::vector<double>>();
+		m_data[0] = vec[0];
+		m_data[1] = vec[1];
+		m_data[2] = vec[2];
+    }
 
 	// Copy constructor
 	ThreeVector(const ThreeVector &vector)

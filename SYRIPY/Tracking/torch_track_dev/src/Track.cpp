@@ -1,31 +1,18 @@
-#include "PtTrack.hh"
+#include "Track.hh"
 #include <fstream>
 #include <stdexcept>
-#include <pybind11/stl.h>
-#include <torch/script.h>
+#include <chrono>
 
 
 #ifdef _OPENMP
     #include <omp.h>
 #endif
 
-py::tuple PtTrack::test()
+py::tuple Track::simulateTrack()
 {
-    vectorType position = vectorType({0., 0., 0.}, true);
-    vectorType momentum = vectorType({0., 1., 0.}, true);
-    Dipole field = Dipole(vectorType({0., 0., 0.}),
-        vectorType({0., 0., 5.}), 1.e6, 1.);
-    FieldContainer field_con = FieldContainer(std::vector<FieldBlock*>{&field});
-    setField(field_con);
-    setTime(0., 1., 1000);
-    setCentralInit(position, momentum);
-    py::tuple result = simulateTrack();
-    auto gradients = backwardTrack();
-    return py::make_tuple(result, gradients);
-}
-
-py::tuple PtTrack::simulateTrack()
-{
+#ifdef USE_TORCH
+    torch::AutoGradMode enable_grad(true);
+#endif
     if (!m_timeSet || !m_initSet || !m_fieldSet)
     {
         throw std::runtime_error("Error: Time or initial conditions not set.");
@@ -35,16 +22,22 @@ py::tuple PtTrack::simulateTrack()
     m_momentum = std::vector<vectorType>(m_time.size());
     m_beta = std::vector<vectorType>(m_time.size());
 
+
     m_position[0] = m_initPosition;
     m_momentum[0] = m_initMomemtum;
     m_beta[0] = m_momentum[0] / math::sqrt(c_light * c_light
         + m_momentum[0].Magnitude2());
 
+    auto start = std::chrono::high_resolution_clock::now();
     for (long unsigned int i = 0; i < m_time.size() - 1; i++)
     {
         updateTrack(m_position, m_momentum, m_beta, i);
     }
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> diff = end - start;
+    std::cout << "Time to run track: " << diff.count() << std::endl;
 
+    
     // Convert and return
     int samples = m_time.size();
     py::array_t<scalarType> positionReturn({samples, 3});
@@ -64,14 +57,13 @@ py::tuple PtTrack::simulateTrack()
     return py::make_tuple(m_time, positionReturn, betaReturn);
 }
 
-py::tuple PtTrack::backwardTrack(std::vector<vectorType> &grad_outputs)
+py::tuple Track::backwardTrack(py::array_t<scalarType> &positionGrad,
+    py::array_t<scalarType> &betaGrad)
 {
-    // Check that USE_TORCH is defined
 #ifndef USE_TORCH
-    throw std::runtime_error("Error: Can't run backwardTrack without"
-        "libtorch.");
-#endif
-
+    throw std::runtime_error("Gradient through track is not supported"
+     " without installing libtorch version of SYRIPY.");
+#else
     // check that forward track has been run
     if (m_position.size() == 0)
     {
@@ -87,8 +79,50 @@ py::tuple PtTrack::backwardTrack(std::vector<vectorType> &grad_outputs)
     tensor_cat.insert(tensor_cat.end(), tensor_momenutm.begin(),
         tensor_momenutm.end());
 
-    auto gradients = torch::autograd::grad(tensor_cat,
-        {m_initPosition, m_initMomemtum}, grad_outputs);
+    /*
+    for(auto& tensor : tensor_position)
+    {
+        if(tensor.requires_grad())
+        {
+            tensor_cat.push_back(tensor);
+        }
+    }
+    for(auto& tensor : tensor_momenutm)
+    {
+        if(tensor.requires_grad())
+        {
+            tensor_cat.push_back(tensor);
+        }
+    }
+    */
+    // Create the grad_outputs
+    std::vector<torch::Tensor> grad_outputs;
+    auto buffer_info = positionGrad.request();
+    for (ssize_t i = 0; i < buffer_info.shape[0]; ++i) {
+        auto sub_array = positionGrad.mutable_data(i, 0);
+        auto tensor = torch::from_blob(sub_array, {buffer_info.shape[1]}, torch::kFloat32);
+        grad_outputs.push_back(tensor.clone());
+    }
+    buffer_info = betaGrad.request();
+    for (ssize_t i = 0; i < buffer_info.shape[0]; ++i) {
+        auto sub_array = betaGrad.mutable_data(i, 0);
+        auto tensor = torch::from_blob(sub_array, {buffer_info.shape[1]}, torch::kFloat32);
+        grad_outputs.push_back(tensor.clone());
+    }
+
+    std::vector<torch::Tensor> inputs;
+    if (m_initPosition.requires_grad())
+    {
+       inputs.push_back(m_initPosition);
+    }
+    if (m_initMomemtum.requires_grad())
+    {
+       inputs.push_back(m_initMomemtum);
+    }
+
+    pybind11::gil_scoped_release no_gil;
+    auto gradients = torch::autograd::grad(tensor_cat, inputs, grad_outputs);
+    pybind11::gil_scoped_acquire acquire_gil;
 
     // Need to check if both params require grads or just 1
     py::array_t<scalarType> position_grad = py::array_t<scalarType>(3,
@@ -97,9 +131,11 @@ py::tuple PtTrack::backwardTrack(std::vector<vectorType> &grad_outputs)
         gradients[1].data_ptr<scalarType>());
 
     return py::make_tuple(position_grad, momentum_grad);
+#endif
 }
 
-void PtTrack::simulateBeam(int nPart)
+
+void Track::simulateBeam(int nPart)
 {
     if (!m_timeSet || !m_beamSet || !m_fieldSet)
     {
@@ -128,7 +164,7 @@ void PtTrack::simulateBeam(int nPart)
     }
 }
 
-void PtTrack::setTime(scalarType time_init, scalarType time_end,
+void Track::setTime(scalarType time_init, scalarType time_end,
     long unsigned int time_steps)
 {
     m_time = std::vector<scalarType>(time_steps);
@@ -140,7 +176,7 @@ void PtTrack::setTime(scalarType time_init, scalarType time_end,
     m_timeSet = true;
 }
 
-void PtTrack::setCentralInit(const vectorType &position_0, 
+void Track::setCentralInit(const vectorType &position_0, 
     const vectorType &momentum_0)
 {
     m_initPosition = position_0;
@@ -148,7 +184,7 @@ void PtTrack::setCentralInit(const vectorType &position_0,
     m_initSet = true;
 }
 
-void PtTrack::setBeamInit(const std::vector<vectorType> &position_0, 
+void Track::setBeamInit(const std::vector<vectorType> &position_0, 
     const std::vector<vectorType> &momentum_0)
 {
     m_initBeamPosition = position_0;
@@ -156,45 +192,49 @@ void PtTrack::setBeamInit(const std::vector<vectorType> &position_0,
     m_beamSet = true;
 }
 
-void PtTrack::updateTrack(std::vector<vectorType>& position,
+void Track::updateTrack(std::vector<vectorType>& position,
     std::vector<vectorType>& momentum, 
     std::vector<vectorType>& beta, int index)
 {
     vectorType posK1, posK2, posK3, posK4;
     vectorType momK1, momK2, momK3, momK4;
-
-
+    vectorType momStep;
+    
     vectorType field = m_fieldContainer.getField(position[index]);
     posK1 = pushPosition(momentum[index]);
     momK1 = pushMomentum(momentum[index], field);   
     field = m_fieldContainer.getField(position[index] + posK1 * m_dt / 2.);
-    posK2 = pushPosition(momentum[index] + momK1 * m_dt / 2.);
-    momK2 = pushMomentum(momentum[index] + momK1 * m_dt / 2., field);
+    momStep = momentum[index] + momK1 * m_dt / 2.;
+    posK2 = pushPosition(momStep);
+    momK2 = pushMomentum(momStep, field);
     field = m_fieldContainer.getField(position[index] + posK2 * m_dt / 2.);
-    posK3 = pushPosition(momentum[index] + momK2 * m_dt / 2.);
-    momK3 = pushMomentum(momentum[index] + momK2 * m_dt / 2., field);
+    momStep = momentum[index] + momK2 * m_dt / 2.;
+    posK3 = pushPosition(momStep);
+    momK3 = pushMomentum(momStep, field);
     field = m_fieldContainer.getField(position[index] + posK3 * m_dt);
-    posK4 = pushPosition(momentum[index] + momK3 * m_dt);
-    momK4 = pushMomentum(momentum[index] + momK3 * m_dt, field);
+    momStep = momentum[index] + momK3 * m_dt;
+    posK4 = pushPosition(momStep);
+    momK4 = pushMomentum(momStep, field);
     position[index+1] = position[index] + (m_dt / 6.) * (posK1 + 2. * posK2
                                                 + 2. * posK3 + posK4);
     momentum[index+1] = momentum[index] + (m_dt / 6.) * (momK1 + 2. * momK2
                                                 + 2. * momK3 + momK4);
-                                                
+       
     beta[index+1] = momentum[index+1] / math::sqrt(c_light * c_light
         + momentum[index+1].Magnitude2()); 
 }
 
-vectorType PtTrack::pushPosition(const vectorType &momentum) const
+vectorType Track::pushPosition(const vectorType &momentum) const
 {
-    // get the magnitude of the momentum
     return momentum / math::sqrt(1. + momentum.Magnitude2()
         / (c_light * c_light));
 }
 
-vectorType PtTrack::pushMomentum(const vectorType &momentum,
+vectorType Track::pushMomentum(const vectorType &momentum,
     const vectorType &field) const
 {
+    std::cout << (math::sqrt(1.0 + momentum.Magnitude2()
+         / (c_light * c_light))) << std::endl;
     return -1 * momentum.Cross(field) / (math::sqrt(1.0 + momentum.Magnitude2()
          / (c_light * c_light)));
 }
