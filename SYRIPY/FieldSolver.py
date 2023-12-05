@@ -134,6 +134,7 @@ class FieldSolver(torch.nn.Module):
                 (self.track.r[0, peak_index] - wf_centre[0])**2.
               + (self.track.r[1, peak_index] - wf_centre[1])**2.
               + (self.track.r[2, peak_index] - wf_centre[2])**2.)**0.5
+        self.wavefront.source_location = self.track.r[:, peak_index]
 
         # Now update all the samples
         track_samples = torch.linspace(0., 1, new_samples, device=self.device)
@@ -147,15 +148,15 @@ class FieldSolver(torch.nn.Module):
                 cumulative_obj.repeat(3, 1), self.track.beta[:, t_0:t_1]
                 )(track_samples.repeat(3, 1))
 
-            # If bunch track exists then also down sample
-            if self.track.bunch_r.shape[0] != 0:
-                n = self.track.bunch_r.shape[:2]
-                self.track.bunch_r = CubicInterp(
-                  cumulative_obj.repeat(*n, 1), self.track.bunch_r[..., t_0:t_1]
+            # If beam track exists then also down sample
+            if self.track.beam_r.shape[0] != 0:
+                n = self.track.beam_r.shape[:2]
+                self.track.beam_r = CubicInterp(
+                  cumulative_obj.repeat(*n, 1), self.track.beam_r[..., t_0:t_1]
                   )(track_samples.repeat(*n, 1))
-                self.track.bunch_beta = CubicInterp(
+                self.track.beam_beta = CubicInterp(
                     cumulative_obj.repeat(*n, 1),
-                    self.track.bunch_beta[..., t_0:t_1]
+                    self.track.beam_beta[..., t_0:t_1]
                     )(track_samples.repeat(*n, 1))
 
         else:  # Use nearest neighbour interpolation
@@ -170,30 +171,30 @@ class FieldSolver(torch.nn.Module):
             self.track.r = self.track.r[:, t_0:t_1][:, sample_index]
             self.track.beta = self.track.beta[:, t_0:t_1][:, sample_index]
 
-            # If bunch track exists then also down sample
-            if self.track.bunch_r.shape[0] != 0:
-                self.track.bunch_r = self.track.bunch_r[..., t_0:t_1][
+            # If beam track exists then also down sample
+            if self.track.beam_r.shape[0] != 0:
+                self.track.beam_r = self.track.beam_r[..., t_0:t_1][
                     ..., sample_index]
-                self.track.bunch_beta = self.track.bunch_beta[..., t_0:t_1][
+                self.track.beam_beta = self.track.beam_beta[..., t_0:t_1][
                     ..., sample_index]
 
         # Set time to be 0 at start
         self.track.time = self.track.time - self.track.time[0]
 
     @torch.jit.export
-    def solve_field(self, bunch_index: int = -1, solve_ends: bool = True
+    def solve_field(self, beam_index: int = -1, solve_ends: bool = True
                     ) -> Wavefront:
         """
         Main callable function to solve the field for either a single particle
-        or a sample from a bunch.
-        :param bunch_index: Index of particle to solve. If we are just solving a
-         single central trajectory then bunch_index=-1 which is the default.
+        or a sample from a beam.
+        :param beam_index: Index of particle to solve. If we are just solving a
+         single central trajectory then beam_index=-1 which is the default.
         :param solve_ends: If true then we use a first order asymptotic
          expansion to solve the ends of the integral.
         :return: The wavefront with calculated field array.
         """
 
-        if bunch_index == -1:
+        if beam_index == -1:
             if self.track.r.shape[0] == 0:
                 raise Exception(
                     "Cannot calculate particle field because track hasn't "
@@ -204,32 +205,32 @@ class FieldSolver(torch.nn.Module):
             beta = self.track.beta
             gamma = self.track.gamma
         else:
-            if self.track.bunch_r.shape[0] == 0:
+            if self.track.beam_r.shape[0] == 0:
                 raise Exception(
-                    "Cannot calculate bunch sample field because bunch tracks "
-                    "haven't been simulated yet. Please simulate bunch track "
-                    "with  track.sim_bunch_c() or track.sim_bunch() before "
+                    "Cannot calculate beam sample field because beam tracks "
+                    "haven't been simulated yet. Please simulate beam track "
+                    "with  track.sim_beam_c() or track.sim_beam() before "
                     "trying to solve field.")
-            r = self.track.bunch_r[bunch_index]
-            beta = self.track.bunch_beta[bunch_index]
-            gamma = self.track.bunch_gamma[bunch_index]
+            r = self.track.beam_r[beam_index]
+            beta = self.track.beam_beta[beam_index]
+            gamma = self.track.beam_gamma[beam_index]
         return self._solve_field(self.track.time, r, beta, gamma, solve_ends,
                                  solve_ends)
 
     @torch.jit.export
-    def solve_field_vmap(self, bunch_index: torch.Tensor,
+    def solve_field_vmap(self, beam_index: torch.Tensor,
                          solve_ends: bool = True) -> Wavefront:
         """
         Main callable function to solve the field if we are using torch's vmap
         method to small simulations in batch mode.
-        :param bunch_index: Batch tensor of indices to be solved.
+        :param beam_index: Batch tensor of indices to be solved.
         :param solve_ends: If true then we use a first order asymptotic
          expansion to solve the ends of the integral.
         :return: The wavefront with calculated field array.
         """
-        r = self.track.bunch_r[bunch_index[None]][0]
-        beta = self.track.bunch_beta[bunch_index[None]][0]
-        gamma = self.track.bunch_gamma[bunch_index[None]][0]
+        r = self.track.beam_r[beam_index[None]][0]
+        beta = self.track.beam_beta[beam_index[None]][0]
+        gamma = self.track.beam_gamma[beam_index[None]][0]
         return self._solve_field(self.track.time, r, beta, gamma, solve_ends,
                                  solve_ends)
 
@@ -248,19 +249,19 @@ class FieldSolver(torch.nn.Module):
         return self._solve_field(time, r, beta, gamma, solve_ends, solve_ends)
 
     @torch.jit.export
-    def solve_field_split(self, bunch_index: int = -1, split_time: float = 0,
+    def solve_field_split(self, beam_index: int = -1, split_time: float = 0,
                           plot_track: bool = False):
         """
         Splits the track into two parts at time index closest to split_time and
         calculates a separate field for both parts of the track.
-        :param bunch_index: Batch tensor of indices to be solved.
+        :param beam_index: Batch tensor of indices to be solved.
          expansion to solve the ends of the integral.
         :param split_time: Time when the track is split.
         :param plot_track: Plots the split track to check time index is in the
          right place.
         :return: (wavefront_1, wavefront_2) with updated field array
         """
-        if bunch_index == -1:
+        if beam_index == -1:
             if self.track.r.shape[0] == 0:
                 raise Exception(
                     "Cannot calculate particle field because track hasn't "
@@ -271,15 +272,15 @@ class FieldSolver(torch.nn.Module):
             beta = self.track.beta
             gamma = self.track.gamma
         else:
-            if self.track.bunch_r.shape[0] == 0:
+            if self.track.beam_r.shape[0] == 0:
                 raise Exception(
-                    "Cannot calculate bunch sample field because bunch tracks "
-                    "haven't been simulated yet. Please simulate bunch track "
-                    "with  track.sim_bunch_c() or track.sim_bunch() before "
+                    "Cannot calculate beam sample field because beam tracks "
+                    "haven't been simulated yet. Please simulate beam track "
+                    "with  track.sim_beam_c() or track.sim_beam() before "
                     "trying to solve field.")
-            r = self.track.bunch_r[bunch_index]
-            beta = self.track.bunch_beta[bunch_index]
-            gamma = self.track.bunch_gamma[bunch_index]
+            r = self.track.beam_r[beam_index]
+            beta = self.track.beam_beta[beam_index]
+            gamma = self.track.beam_gamma[beam_index]
 
         if split_time < self.track.time[0] or split_time > self.track.time[-1]:
             raise Exception(
