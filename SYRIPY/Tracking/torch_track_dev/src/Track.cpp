@@ -22,37 +22,35 @@ py::tuple Track::simulateTrack()
     m_momentum = std::vector<vectorType>(m_time.size());
     m_beta = std::vector<vectorType>(m_time.size());
 
-
     m_position[0] = m_initPosition;
     m_momentum[0] = m_initMomemtum;
     m_beta[0] = m_momentum[0] / math::sqrt(c_light * c_light
         + m_momentum[0].Magnitude2());
+    scalarTensor gamma = math::sqrt(1. + m_initMomemtum.Magnitude2()
+        / (c_light * c_light));
 
-    auto start = std::chrono::high_resolution_clock::now();
     for (long unsigned int i = 0; i < m_time.size() - 1; i++)
     {
-        updateTrack(m_position, m_momentum, m_beta, i);
+        updateTrack(m_position, m_momentum, m_beta, gamma, i);
     }
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> diff = end - start;
-    std::cout << "Time to run track: " << diff.count() << std::endl;
-
     
     // Convert and return
     int samples = m_time.size();
     py::array_t<scalarType> positionReturn({samples, 3});
     py::array_t<scalarType> betaReturn({samples, 3});
+    auto positionMutable = positionReturn.mutable_unchecked<2>();
+    auto betaMutable = betaReturn.mutable_unchecked<2>();
 
     for (long unsigned int i = 0; i < m_time.size(); i++)
     {
         scalarType* pos_ptr = m_position[i].data_ptr<scalarType>();
         scalarType* beta_ptr = m_beta[i].data_ptr<scalarType>();
-        positionReturn.mutable_at(i, 0) = pos_ptr[0];
-        positionReturn.mutable_at(i, 1) = pos_ptr[1];
-        positionReturn.mutable_at(i, 2) = pos_ptr[2];
-        betaReturn.mutable_at(i, 0) = beta_ptr[0];
-        betaReturn.mutable_at(i, 1) = beta_ptr[1];
-        betaReturn.mutable_at(i, 2) = beta_ptr[2];
+        positionMutable(i, 0) = pos_ptr[0];
+        positionMutable(i, 1) = pos_ptr[1];
+        positionMutable(i, 2) = pos_ptr[2];
+        betaMutable(i, 0) = beta_ptr[0];
+        betaMutable(i, 1) = beta_ptr[1];
+        betaMutable(i, 2) = beta_ptr[2];
     }
     return py::make_tuple(m_time, positionReturn, betaReturn);
 }
@@ -79,22 +77,6 @@ py::tuple Track::backwardTrack(py::array_t<scalarType> &positionGrad,
     tensor_cat.insert(tensor_cat.end(), tensor_momenutm.begin(),
         tensor_momenutm.end());
 
-    /*
-    for(auto& tensor : tensor_position)
-    {
-        if(tensor.requires_grad())
-        {
-            tensor_cat.push_back(tensor);
-        }
-    }
-    for(auto& tensor : tensor_momenutm)
-    {
-        if(tensor.requires_grad())
-        {
-            tensor_cat.push_back(tensor);
-        }
-    }
-    */
     // Create the grad_outputs
     std::vector<torch::Tensor> grad_outputs;
     auto buffer_info = positionGrad.request();
@@ -110,15 +92,7 @@ py::tuple Track::backwardTrack(py::array_t<scalarType> &positionGrad,
         grad_outputs.push_back(tensor.clone());
     }
 
-    std::vector<torch::Tensor> inputs;
-    if (m_initPosition.requires_grad())
-    {
-       inputs.push_back(m_initPosition);
-    }
-    if (m_initMomemtum.requires_grad())
-    {
-       inputs.push_back(m_initMomemtum);
-    }
+    std::vector<torch::Tensor> inputs = {m_initPosition, m_initMomemtum};
 
     pybind11::gil_scoped_release no_gil;
     auto gradients = torch::autograd::grad(tensor_cat, inputs, grad_outputs);
@@ -134,34 +108,63 @@ py::tuple Track::backwardTrack(py::array_t<scalarType> &positionGrad,
 #endif
 }
 
-
-void Track::simulateBeam(int nPart)
+py::tuple Track::simulateBeam()
 {
+#ifdef USE_TORCH
+    torch::AutoGradMode enable_grad(true);
+#endif
     if (!m_timeSet || !m_beamSet || !m_fieldSet)
     {
-        std::cerr << "Error: Time or initial conditions not set." << std::endl;
-        return;
+        throw std::runtime_error("Error: Time or initial conditions not set.");
     }
+    int nPart = m_initBeamPosition.size();
     int tSamp = m_time.size();
-    std::vector<vectorType> position = std::vector<vectorType>(nPart * tSamp);
-    std::vector<vectorType> momentum = std::vector<vectorType>(nPart * tSamp);
-    std::vector<vectorType> beta = std::vector<vectorType>(nPart * tSamp);
+    m_beamPosition = std::vector<vectorType>(nPart * tSamp);
+    m_beamMomentum = std::vector<vectorType>(nPart * tSamp);
+    m_beamBeta = std::vector<vectorType>(nPart * tSamp);
 
 #ifdef _OPENMP
-    #pragma omp parallel for
+    #pragma omp parallel for num_threads(32)
 #endif
     for (int i = 0; i < nPart; i++)
     {
         int partIndex = i * tSamp;
-        position[partIndex] = m_initBeamPosition[i];
-        momentum[partIndex] = m_initBeamMomemtum[i];
-        beta[partIndex] = momentum[partIndex] / math::sqrt(c_light * c_light
-            + momentum[partIndex].Magnitude2());
+        m_beamPosition[partIndex] = m_initBeamPosition[i];
+        m_beamMomentum[partIndex] = m_initBeamMomentum[i];
+        m_beamBeta[partIndex] = m_initBeamMomentum[i] / math::sqrt(
+            c_light * c_light + m_initBeamMomentum[i].Magnitude2());
+        scalarTensor gamma = math::sqrt(1. + m_initBeamMomentum[i].Magnitude2()
+            / (c_light * c_light));
         for (long unsigned int j = 0; j < tSamp - 1; j++)
         {
-            updateTrack(position, momentum, beta, partIndex + j);
+            updateTrack(m_beamPosition, m_beamMomentum, m_beamBeta, gamma,
+                partIndex + j);
         }
     }
+    // Convert and return
+    int samples = m_time.size();
+    py::array_t<scalarType> positionReturn({nPart * samples, 3});
+    py::array_t<scalarType> betaReturn({nPart * samples, 3});
+    auto positionMutable = positionReturn.mutable_unchecked<2>();
+    auto betaMutable = betaReturn.mutable_unchecked<2>();
+
+    for (long unsigned int i = 0; i < nPart * samples; i++)
+    {
+        scalarType* pos_ptr = m_beamPosition[i].data_ptr<scalarType>();
+        scalarType* beta_ptr = m_beamBeta[i].data_ptr<scalarType>();
+        positionMutable(i, 0) = pos_ptr[0];
+        positionMutable(i, 1) = pos_ptr[1];
+        positionMutable(i, 2) = pos_ptr[2];
+        betaMutable(i, 0) = beta_ptr[0];
+        betaMutable(i, 1) = beta_ptr[1];
+        betaMutable(i, 2) = beta_ptr[2];
+    }
+
+    // Change shape
+    positionReturn.resize({nPart, samples, 3});
+    betaReturn.resize({nPart, samples, 3});
+
+    return py::make_tuple(m_time, positionReturn, betaReturn);
 }
 
 void Track::setTime(scalarType time_init, scalarType time_end,
@@ -184,57 +187,63 @@ void Track::setCentralInit(const vectorType &position_0,
     m_initSet = true;
 }
 
-void Track::setBeamInit(const std::vector<vectorType> &position_0, 
-    const std::vector<vectorType> &momentum_0)
+void Track::setBeamInit(const py::array_t<scalarType>& position_0, 
+    const py::array_t<scalarType>& momentum_0)
 {
-    m_initBeamPosition = position_0;
-    m_initBeamMomemtum = momentum_0;
+    py::buffer_info positionInfo = position_0.request();
+    auto poisitonPtr = static_cast<scalarType*>(positionInfo.ptr);
+    py::buffer_info momentumInfo = momentum_0.request();
+    auto momentumPtr = static_cast<scalarType*>(momentumInfo.ptr);
+    int n_rows = positionInfo.shape[0];
+    // print the shape of position and momentum
+    
+    for (int i = 0; i < n_rows; i++)
+    {
+        m_initBeamPosition.push_back(vectorType(&poisitonPtr[i*3]));
+        m_initBeamMomentum.push_back(vectorType(&momentumPtr[i*3]));
+    }
     m_beamSet = true;
 }
 
 void Track::updateTrack(std::vector<vectorType>& position,
     std::vector<vectorType>& momentum, 
-    std::vector<vectorType>& beta, int index)
+    std::vector<vectorType>& beta, scalarTensor gamma, int index)
 {
     vectorType posK1, posK2, posK3, posK4;
     vectorType momK1, momK2, momK3, momK4;
     vectorType momStep;
     
     vectorType field = m_fieldContainer.getField(position[index]);
-    posK1 = pushPosition(momentum[index]);
-    momK1 = pushMomentum(momentum[index], field);   
+    posK1 = pushPosition(momentum[index], gamma);
+    momK1 = pushMomentum(momentum[index], field, gamma);   
     field = m_fieldContainer.getField(position[index] + posK1 * m_dt / 2.);
     momStep = momentum[index] + momK1 * m_dt / 2.;
-    posK2 = pushPosition(momStep);
-    momK2 = pushMomentum(momStep, field);
+    posK2 = pushPosition(momStep, gamma);
+    momK2 = pushMomentum(momStep, field, gamma);
     field = m_fieldContainer.getField(position[index] + posK2 * m_dt / 2.);
     momStep = momentum[index] + momK2 * m_dt / 2.;
-    posK3 = pushPosition(momStep);
-    momK3 = pushMomentum(momStep, field);
+    posK3 = pushPosition(momStep, gamma);
+    momK3 = pushMomentum(momStep, field, gamma);
     field = m_fieldContainer.getField(position[index] + posK3 * m_dt);
     momStep = momentum[index] + momK3 * m_dt;
-    posK4 = pushPosition(momStep);
-    momK4 = pushMomentum(momStep, field);
+    posK4 = pushPosition(momStep, gamma);
+    momK4 = pushMomentum(momStep, field, gamma);
     position[index+1] = position[index] + (m_dt / 6.) * (posK1 + 2. * posK2
                                                 + 2. * posK3 + posK4);
     momentum[index+1] = momentum[index] + (m_dt / 6.) * (momK1 + 2. * momK2
                                                 + 2. * momK3 + momK4);
-       
-    beta[index+1] = momentum[index+1] / math::sqrt(c_light * c_light
-        + momentum[index+1].Magnitude2()); 
+
+    beta[index+1] = momentum[index+1] / (c_light * gamma);
 }
 
-vectorType Track::pushPosition(const vectorType &momentum) const
+vectorType Track::pushPosition(const vectorType &momentum,
+     scalarTensor gamma) const
 {
-    return momentum / math::sqrt(1. + momentum.Magnitude2()
-        / (c_light * c_light));
+    return momentum / gamma;
 }
 
 vectorType Track::pushMomentum(const vectorType &momentum,
-    const vectorType &field) const
+    const vectorType &field, scalarTensor gamma) const
 {
-    std::cout << (math::sqrt(1.0 + momentum.Magnitude2()
-         / (c_light * c_light))) << std::endl;
-    return -1 * momentum.Cross(field) / (math::sqrt(1.0 + momentum.Magnitude2()
-         / (c_light * c_light)));
+    return -1 * momentum.Cross(field) / gamma;
 }

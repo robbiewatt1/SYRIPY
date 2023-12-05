@@ -57,6 +57,8 @@ protected:
     scalarType m_length;                // Length of magnet
     scalarType m_edgeLength;            // Magnet edge length
     scalarType m_edgeScaleFact;         // Edge scaling factor
+    scalarType m_constLengthHalf;       // Half of the length where field is const
+
 };
 
 

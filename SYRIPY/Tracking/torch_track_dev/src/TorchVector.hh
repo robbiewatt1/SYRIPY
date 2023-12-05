@@ -60,6 +60,12 @@ public:
         this->set_requires_grad(requires_grad);
     }
 
+    // Bad init constructor
+	TorchVector(float* ptr)
+	{
+        *this = tensor({ptr[0], ptr[1], ptr[2]});
+	}
+
     float getItem(size_t index) const
     {
         return data_ptr<float>()[index];

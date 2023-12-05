@@ -21,10 +21,10 @@ public:
 	// Default Constructor
 	ThreeVector()
 	{
-		m_data[0] = 0;
-		m_data[1] = 0;
-		m_data[2] = 0;
-
+		
+		//m_data[0] = 0;
+		//m_data[1] = 0;
+		//m_data[2] = 0;
 	}
 
 	// Constructor for consisency with torch
@@ -61,6 +61,14 @@ public:
 		m_data[0] = x;
 		m_data[1] = y;
 		m_data[2] = z;
+	}
+
+	// Bad init constructor
+	ThreeVector(double* ptr)
+	{
+		m_data[0] = ptr[0];
+		m_data[1] = ptr[1];
+		m_data[2] = ptr[2];
 	}
 
 	~ThreeVector()

@@ -8,9 +8,9 @@ if (BUILD_LIBTORCH)
     OUTPUT_STRIP_TRAILING_WHITESPACE)
     message(CMAKE_PREFIX_PATH)
     find_package(Torch REQUIRED)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS} -O3")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS} -fopenmp -O3")
 else()
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fopenmp -O3")
 endif()
 
 

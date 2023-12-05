@@ -32,10 +32,10 @@ class Track(torch.nn.Module):
         self.beta = torch.tensor([])   # Velocity along particle path
         self.gamma = torch.tensor([])  # Lorentz factor of particle
 
-        self.bunch_r = torch.tensor([])      # Bunch position
-        self.bunch_p = torch.tensor([])      # Bunch momentum
-        self.bunch_beta = torch.tensor([])   # Bunch beta
-        self.bunch_gamma = torch.tensor([])  # Bunch lorentz factor
+        self.beam_r = torch.tensor([])      # Beam position
+        self.beam_p = torch.tensor([])      # Beam momentum
+        self.beam_beta = torch.tensor([])   # Beam beta
+        self.beam_gamma = torch.tensor([])  # Beam lorentz factor
 
         # initial beam parameters
         self.init_r0 = None
@@ -83,7 +83,7 @@ class Track(torch.nn.Module):
         return fig, ax
 
     @torch.jit.ignore
-    def plot_bunch(self, axes: List[int], n_part: int = -1, pos: bool = True
+    def plot_beam(self, axes: List[int], n_part: int = -1, pos: bool = True
                    ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Plot single particle track
@@ -92,16 +92,17 @@ class Track(torch.nn.Module):
         :param pos: Bool if true then plot position else plot beta
         :return: fig, ax
         """
-        if self.bunch_r.shape[0] == 0:
-            raise Exception("No bunch has been simulated so nothing can be "
+        if self.beam_r.shape[0] == 0:
+            raise Exception("No beam has been simulated so nothing can be "
                             "plotted.")
+
         fig, ax = plt.subplots()
         if pos:
-            ax.plot(self.bunch_r[:n_part, axes[0], :].cpu().detach().T,
-                    self.bunch_r[:n_part, axes[1], :].cpu().detach().T)
+            ax.plot(self.beam_r[:n_part, axes[0], :].cpu().detach().numpy().T,
+                    self.beam_r[:n_part, axes[1], :].cpu().detach().numpy().T)
         else:
-            ax.plot(self.bunch_beta[:n_part, axes[0], :].cpu().detach().T,
-                    self.bunch_beta[:n_part, axes[1], :].cpu().detach().T)
+            ax.plot(self.beam_beta[:n_part, axes[0], :].cpu().detach().T,
+                    self.beam_beta[:n_part, axes[1], :].cpu().detach().T)
         return fig, ax
 
     @torch.jit.export
@@ -116,10 +117,10 @@ class Track(torch.nn.Module):
             self.r = self.r.to(device)
             self.beta = self.beta.to(device)
             self.gamma = self.gamma.to(device)
-        if self.bunch_r.shape[0] != 0:
-            self.bunch_r = self.bunch_r.to(device)
-            self.bunch_beta = self.bunch_beta.to(device)
-            self.bunch_gamma = self.bunch_gamma.to(device)
+        if self.beam_r.shape[0] != 0:
+            self.beam_r = self.beam_r.to(device)
+            self.beam_beta = self.beam_beta.to(device)
+            self.beam_gamma = self.beam_gamma.to(device)
         return self
 
     @torch.jit.ignore
@@ -245,19 +246,18 @@ class Track(torch.nn.Module):
 
     @torch.jit.export
     def sim_beam(self, time: torch.Tensor, n_part: Optional[int] = None,
-                 bunch_r: Optional[torch.Tensor] = None,
-                 bunch_p: Optional[torch.Tensor] = None,
+                 beam_r: Optional[torch.Tensor] = None,
+                 beam_p: Optional[torch.Tensor] = None,
                  use_gpu=False) -> None:
         """
-        Models the trajectory of a bunch of particle through a field defined
-        by field_container (cpp version should be much-much faster). If bunch_r,
-        bunch_d and bunch_gamma are provided then they are used instead of the
+        Models the trajectory of a beam of particle through a field defined
+        by field_container (cpp version should be much-much faster). If beam_r,
+        beam_p are provided then they are used instead of the
         beam moments from set_beam_params.
         :param time: Array of time samples.
         :param n_part: Number of particles to simulate.
-        :param bunch_r: Initial position of tracks.
-        :param bunch_p: Initial momeumtum of tracks.
-        :param bunch_g: Initial lorentz factor tracks.
+        :param beam_r: Initial position of tracks.
+        :param beam_p: Initial momeumtum of tracks.
         :param use_gpu: Bool if true then use gpu for calculation.
         """
 
@@ -275,65 +275,65 @@ class Track(torch.nn.Module):
                   f" Increasing steps to {time.shape[0] + 1}")
             self.time = torch.linspace(time[0], time[-1], time.shape[0] + 1,
                                        device=device)
-        # if no bunch parameters are provided then use the ones from
+        # if no beam parameters are provided then use the ones from
         # set_beam_params
-        if bunch_r is None or bunch_p is None:
+        if beam_r is None or beam_p is None:
             if self.beam_params is None:
                 raise TypeError("Beam parameters have not been set.")
             else:
-                bunch_r, bunch_p = self._sample_beam(n_part)
+                beam_r, beam_p = self._sample_beam(n_part)
 
         # make sure all arrays are the same shape
-        samples = bunch_r.shape[0]
-        self.bunch_r = torch.zeros((samples, self.time.shape[0], 3),
+        samples = beam_r.shape[0]
+        self.beam_r = torch.zeros((samples, self.time.shape[0], 3),
                                    device=device)
-        self.bunch_p = torch.zeros((samples, self.time.shape[0], 3),
+        self.beam_p = torch.zeros((samples, self.time.shape[0], 3),
                                    device=device)
-        self.bunch_r[:, 0] = bunch_r
-        self.bunch_p[:, 0] = bunch_p
-        self.bunch_g = (torch.sum(bunch_p * bunch_p, dim=1)
+        self.beam_r[:, 0] = beam_r
+        self.beam_p[:, 0] = beam_p
+        self.beam_g = (torch.sum(beam_p * beam_p, dim=1)
                         / self.c_light**2. + 1.)**0.5
         
         for i, t in enumerate(time[:-1]):
             detla_t = (time[i+1] - time[i])
             delta_t_2 = detla_t / 2.
 
-            field = self.field_container.get_field(self.bunch_r[:, i].clone())
-            r_k1 = self._dr_dt(self.bunch_p[:, i].clone())
-            p_k1 = self._dp_dt(self.bunch_p[:, i].clone(), field)
+            field = self.field_container.get_field(self.beam_r[:, i].clone())
+            r_k1 = self._dr_dt(self.beam_p[:, i].clone())
+            p_k1 = self._dp_dt(self.beam_p[:, i].clone(), field)
 
-            field = self.field_container.get_field(self.bunch_r[:, i].clone()
+            field = self.field_container.get_field(self.beam_r[:, i].clone()
                                                    + r_k1 * delta_t_2)
-            r_k2 = self._dr_dt(self.bunch_p[:, i].clone() + p_k1 * delta_t_2)
-            p_k2 = self._dp_dt(self.bunch_p[:, i].clone() + p_k1 * delta_t_2,
+            r_k2 = self._dr_dt(self.beam_p[:, i].clone() + p_k1 * delta_t_2)
+            p_k2 = self._dp_dt(self.beam_p[:, i].clone() + p_k1 * delta_t_2,
                                field)
 
-            field = self.field_container.get_field(self.bunch_r[:, i].clone()
+            field = self.field_container.get_field(self.beam_r[:, i].clone()
                                                    + r_k2 * delta_t_2)
-            r_k3 = self._dr_dt(self.bunch_p[:, i].clone() + p_k2 * delta_t_2)
-            p_k3 = self._dp_dt(self.bunch_p[:, i].clone() + p_k2 * delta_t_2,
+            r_k3 = self._dr_dt(self.beam_p[:, i].clone() + p_k2 * delta_t_2)
+            p_k3 = self._dp_dt(self.beam_p[:, i].clone() + p_k2 * delta_t_2,
                                field)
 
-            field = self.field_container.get_field(self.bunch_r[:, i].clone()
+            field = self.field_container.get_field(self.beam_r[:, i].clone()
                                                    + r_k3 * detla_t)
-            r_k4 = self._dr_dt(self.bunch_p[:, i].clone() + p_k3 * detla_t)
-            p_k4 = self._dp_dt(self.bunch_p[:, i].clone() + p_k3 * detla_t,
+            r_k4 = self._dr_dt(self.beam_p[:, i].clone() + p_k3 * detla_t)
+            p_k4 = self._dp_dt(self.beam_p[:, i].clone() + p_k3 * detla_t,
                                field)
 
-            self.bunch_r[:, i+1] = self.bunch_r[:, i].clone() + (detla_t / 6.) \
+            self.beam_r[:, i+1] = self.beam_r[:, i].clone() + (detla_t / 6.) \
                                    * (r_k1 + 2. * r_k2 + 2. * r_k3 + r_k4)
-            self.bunch_p[:, i+1] = self.bunch_p[:, i].clone() + (detla_t / 6.) \
+            self.beam_p[:, i+1] = self.beam_p[:, i].clone() + (detla_t / 6.) \
                                    * (p_k1 + 2. * p_k2 + 2. * p_k3 + p_k4)
 
-        self.bunch_beta = self.bunch_p / (self.c_light**2.0 + torch.sum(
-            self.bunch_p * self.bunch_p, dim=-1)[..., None])**0.5
+        self.beam_beta = self.beam_p / (self.c_light**2.0 + torch.sum(
+            self.beam_p * self.beam_p, dim=-1)[..., None])**0.5
 
-        self.r = torch.mean(self.bunch_r, dim=0).to(self.device).T
-        self.beta = torch.mean(self.bunch_beta, dim=0).to(self.device).T
-        self.gamma = torch.mean(self.bunch_g, dim=0).to(self.device)
-        self.bunch_r = self.bunch_r.permute((0, 2, 1)).to(self.device)
-        self.bunch_beta = self.bunch_beta.permute((0, 2, 1)).to(self.device)
-        self.bunch_gamma = self.bunch_g.to(self.device)
+        self.r = torch.mean(self.beam_r, dim=0).to(self.device).T
+        self.beta = torch.mean(self.beam_beta, dim=0).to(self.device).T
+        self.gamma = torch.mean(self.beam_g, dim=0).to(self.device)
+        self.beam_r = self.beam_r.permute((0, 2, 1)).to(self.device)
+        self.beam_beta = self.beam_beta.permute((0, 2, 1)).to(self.device)
+        self.beam_gamma = self.beam_g.to(self.device)
         self.time = self.time.to(self.device)
 
     @torch.jit.ignore
@@ -357,12 +357,12 @@ class Track(torch.nn.Module):
             steps = time.shape[0] + 1
         else:
             steps = time.shape[0]
+        time = torch.linspace(time[0], time[-1], steps)
 
         track = cTrack.Track()
         track.setField(self.field_container.gen_c_container())
         track.setTime(time[0], time[-1], steps)
         r, beta = track_func(self.init_r0, self.init_p0, track)
-        time = torch.linspace(time[0], time[-1], steps)
         # Transpose for field solver and switch device
         self.time = time.type(torch.get_default_dtype()).to(self.device)
         self.r = r.type(torch.get_default_dtype()).to(self.device).T
@@ -372,52 +372,58 @@ class Track(torch.nn.Module):
             ).to(self.device)
 
     @torch.jit.ignore
-    def sim_beam_c(self, n_part: int, time: torch.Tensor) -> None:
+    def sim_beam_c(self, time: torch.Tensor, n_part: Optional[int] = None,
+                   beam_r: Optional[torch.Tensor] = None,
+                   beam_p: Optional[torch.Tensor] = None,) -> None:
         """
         Models the trajectory of a single particle through a field defined
         by field_container with cpp version (should be much-much faster)
-        :param n_part: Number of particles to simulate.
         :param time: Array of time samples.
+        :param n_part: Number of particles to simulate.
+        :param beam_r: Initial position of tracks.
+        :param beam_p: Initial momeumtum of tracks.
         """
         if self.field_container is None:
             raise TypeError("Field container value is None.")
 
-        if (self.init_r0 is None or self.init_d0 is None
-                or self.init_gamma is None):
-            raise TypeError("Initial parameters have not been set.")
-
-        if self.beam_params is None:
-            raise TypeError("Beam parameters have not been set.")
-
-        # TODO allow for self sampled tracks to be simulated
+        # if no beam parameters are provided then use the ones from
+        # set_beam_params
+        if beam_r is None or beam_p is None:
+            if self.beam_params is None:
+                raise TypeError("Beam parameters have not been set.")
+            else:
+                if n_part is None:
+                    raise TypeError("Number of particles has not been set.")
+                beam_r, beam_p = self._sample_beam(n_part)
+        self.beam_g = (torch.sum(beam_p * beam_p, dim=1)
+                / self.c_light**2. + 1.)**0.5
 
         if time.shape[0] % 2 == 0:
             print(f"Warning: Filon integrator is a Simpson's based method"
                   f" requiring an odd number of time steps for high accuracy."
                   f" Increasing steps to {time.shape[0] + 1}")
-            time = torch.linspace(time[0], time[-1], time.shape[0] + 1)
+            steps = time.shape[0] + 1
+        else:
+            steps = time.shape[0]
+        self.time = torch.linspace(time[0], time[-1], steps)
 
-        # First we simulate the central track
-        self.sim_central_c(time)
-        r0_c = cTrack.ThreeVector(self.init_r0[0], self.init_r0[1],
-                                  self.init_r0[2])
-        d0_c = cTrack.ThreeVector(self.init_d0[0], self.init_d0[1],
-                                  self.init_d0[2])
-        field = self.field_container.gen_c_container()
         track = cTrack.Track()
-        track.setTime(time[0], time[-1], time.shape[0])
-        track.setCentralInit(r0_c, d0_c, self.init_gamma.item())
-        track.setBeamParams(self.beam_params)
-        track.setField(field)
-        time, r, beta = track.simulateBeam(n_part)
+        track.setField(self.field_container.gen_c_container())
+        track.setTime(time[0], time[-1], steps)
+        beam_r, beam_beta = BeamAutograd.forward(None, beam_r, beam_p, track)
+        #track.setBeamInit(beam_r.numpy(), beam_p.numpy())
+        #_, beam_r, beam_beta = track.simulateBeam()
 
-        # Transpose for field solver and switch device
-        self.bunch_r = torch.from_numpy(r.transpose((0, 2, 1))).type(
+        self.beam_r = beam_r.permute((0, 2, 1)).type(
             torch.get_default_dtype()).to(self.device)
-        self.bunch_beta = torch.from_numpy(beta.transpose((0, 2, 1))).type(
+        self.beam_beta = beam_beta.permute((0, 2, 1)).type(
             torch.get_default_dtype()).to(self.device)
-        self.bunch_gamma = 1. / (1. - torch.sum(self.bunch_beta[:, :, 0]**2.,
-                                                dim=1))**0.5
+        self.beam_gamma = self.beam_g.to(self.device)
+        self.r = torch.mean(self.beam_r, dim=0)
+        self.beta = torch.mean(self.beam_beta, dim=0)
+        self.gamma = torch.mean(self.beam_g, dim=0)
+        self.time = self.time.to(self.device)
+
 
     def _sample_beam(self, n_part: int) -> Tuple[torch.Tensor, torch.Tensor,
                                                  torch.Tensor]:
@@ -427,34 +433,37 @@ class Track(torch.nn.Module):
         :param n_part: Number of particles to sample.
         """
         if (self.beam_params is None or self.init_r0 is None
-                or self.init_d0 is None or self.init_gamma is None):
+                or self.init_p0 is None):
             raise TypeError("Beam moments or central parameters have not been"
                             " set.")
 
         # First set up the distribution classes
-        x_angle = torch.arctan(self.init_d0[0] / self.init_d0[2])
+        x_angle = torch.arctan(self.init_p0[0] / self.init_p0[2])
         x_dist = MultivariateNormal(
             loc=torch.tensor([self.init_r0[0], x_angle]),
             covariance_matrix=torch.tensor([[
                 self.beam_params[0], self.beam_params[1]],
                 [self.beam_params[1], self.beam_params[2]]]))
-        y_angle = torch.arctan(self.init_d0[1] / self.init_d0[2])
+        y_angle = torch.arctan(self.init_p0[1] / self.init_p0[2])
         y_dist = MultivariateNormal(
             loc=torch.tensor([self.init_r0[1], y_angle]),
             covariance_matrix=torch.tensor([[
                 self.beam_params[0], self.beam_params[1]],
                 [self.beam_params[1], self.beam_params[2]]]))
-        g_dist = Normal(loc=self.init_gamma, scale=self.beam_params[7]**0.5)
+        init_gamma = (1. + torch.sum(self.init_p0**2.) / self.c_light**2.)**0.5
+        g_dist = Normal(loc=init_gamma, scale=self.beam_params[7]**0.5)
         x_sample = x_dist.sample((n_part,))
         y_sample = y_dist.sample((n_part,))
-        bunch_gamma = g_dist.sample((n_part,))
+        beam_gamma = g_dist.sample((n_part,))
         beam_r0 = torch.stack([x_sample[:, 0], y_sample[:, 0],
                                torch.ones_like(x_sample[:, 0])
                                * self.init_r0[2]], dim=1)
-        beam_d0 = torch.stack([torch.arctan(x_sample[:, 1]),
-                               torch.arctan(y_sample[:, 1]),
-                               torch.ones_like(x_sample[:, 0])], dim=1)
-        return beam_r0, beam_d0, bunch_gamma
+        dir_x = torch.tan(x_sample[:, 1])
+        dir_y = torch.tan(y_sample[:, 1])
+        dir_z = (1 - (dir_x**2. + dir_y)**2.)**0.5
+        p_total = self.c_light * (beam_gamma**2. - 1.)**0.5
+        beam_p0 = p_total[:, None] * torch.stack([dir_x, dir_y, dir_z], dim=1) 
+        return beam_r0, beam_p0
 
     def _dp_dt(self, p: torch.Tensor, field: torch.Tensor) -> torch.Tensor:
         """
@@ -495,8 +504,11 @@ class TrackAutograd(torch.autograd.Function):
         :param track: Instance of c++ track class
         :return: position, beta
         """
-        r_track = cTrack.ThreeVector(position.tolist(), True)
-        m_track = cTrack.ThreeVector(momentum.tolist(), True)
+        require_grad = False
+        if momentum.requires_grad or position.requires_grad:
+            require_grad = True
+        r_track = cTrack.ThreeVector(position.tolist(), require_grad)
+        m_track = cTrack.ThreeVector(momentum.tolist(), require_grad)
         track.setCentralInit(r_track, m_track)
         result = track.simulateTrack()
         pos, beta = torch.tensor(result[1]), torch.tensor(result[2])
@@ -533,6 +545,57 @@ def track_func(position: torch.Tensor, momentum: torch.Tensor,
     return TrackAutograd.apply(position, momentum, track)
 
 
+class BeamAutograd(torch.autograd.Function):
+    """
+    Differentiable tracking using libtorch
+    """
+
+    @staticmethod
+    def forward(ctx, beam_position: torch.Tensor, beam_momentum: torch.Tensor,
+                track: Track) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        This function takes the inputs and the track and returns the output
+        :param ctx: Context
+        :param position: Initial position of particle
+        :param momentum: Initial momentum of particle
+        :param track: Instance of c++ track class
+        :return: position, beta
+        """
+        if beam_position.requires_grad or beam_momentum.requires_grad:
+            raise Exception("Gradients are not supported for beam tracking "
+                            "with libtorch yet. You can use pytorch version "
+                            "instaed. Even better, why not help out and "
+                            "implement it?")
+        track.setBeamInit(beam_position.numpy(), beam_momentum.numpy())
+        result = track.simulateBeam()
+        pos, beta = torch.tensor(result[1]), torch.tensor(result[2])
+        return pos, beta
+    
+    @staticmethod
+    @torch.autograd.function.once_differentiable
+    def backward(ctx, position_grad_out: torch.Tensor,
+                 beta_grad_out: torch.Tensor
+                 ) -> Tuple[torch.Tensor, torch.Tensor, None]:
+        """
+        This function takes the gradient and returns the gradient of the inputs
+        :param ctx: Context
+        :param position_grad_out: Gradient of position
+        :param beta_grad_out: Gradient of beta
+        :return: position_grad, momentum_grad, None
+        """
+        return None, None, None
+
+def beam_func(beam_position: torch.Tensor, beam_momentum: torch.Tensor,
+                track: Track) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    This function takes the inputs and the track and returns the output
+    :param beam_position: Initial position of particles
+    :param beam_momentum: Initial momentum of particles
+    :param track: Instance of c++ track class
+    :return: position, beta
+    """
+    return TrackAutograd.apply(beam_position, beam_momentum, track)
+
 
 if __name__ == "__main__":
     from Magnets import Dipole, FieldContainer
@@ -540,21 +603,33 @@ if __name__ == "__main__":
 
 
     # Define the magnet setup
-    d0 = Dipole(torch.tensor([-0., 0., 0.]),      # Location (m)
-                1e99,                  # Length (m)
-                torch.tensor([0, 1., 0]),   # Field strength (T)
+    # Define the magnet setup
+    d0 = Dipole(torch.tensor([-0.1156, 0, 0]),      # Location (m)
+                0.203274830142196,                  # Length (m)
+                torch.tensor([0, 0.49051235, 0]),   # Field strength (T)
                 None,                               # Direction (not implimented yet)
                 0.05)                               # Edge length (m)
-    field = FieldContainer([d0])
-    print(field, "here")
-    track = Track(field)
-    track.set_central_params(torch.tensor([1., 0., 0.], requires_grad=True),
-                             torch.tensor([0, 0, 339.3 / 0.51099890221], requires_grad=True))
-    start = timer.time()
-    for i in range(5):
-        track.sim_central_c(torch.linspace(0, 1., 1001))
-        track.r.sum().backward()
+    d1 = Dipole(torch.tensor([0, 0, 1.0334]), 0.203274830142196,
+                torch.tensor([0, -0.49051235, 0]), None, 0.05)
+    d2 = Dipole(torch.tensor([0, 0, 2.0668]), 0.203274830142196,
+                torch.tensor([0, -0.49051235, 0]), None, 0.05)
+    field = FieldContainer([d0, d1, d2])
+    r_init = torch.tensor([-0.0913563873, 0, -1], requires_grad=True)
+    p_init = torch.tensor([0, 0, 0.3 * 339.3 / 0.51099890221], requires_grad=False)
 
+    track = Track(field)
+    track.set_central_params(r_init, p_init)
+    track.set_beam_params(torch.tensor([0.0000001, 0, 0.0000001, 0.0000001, 0, 0.0000001, 0, 1]))
+    start = timer.time()
+    track.sim_beam_c(torch.linspace(0, 14, 501), 1000)
     print(timer.time() - start)
-    track.plot_track([2, 0])
+    #
+    #track.sim_beam(torch.linspace(0, 14, 1001), 100)
+    track.plot_beam([2, 0])
+    #track.plot_bunch([2, 0])
+    #plt.show()
+    ##x_samples, p_samples = track._sample_beam(10000)
+
+    #    fig, ax = plt.subplots()
+    #    ax.scatter(p_samples[:, 0], p_samples[:, 2])
     plt.show()

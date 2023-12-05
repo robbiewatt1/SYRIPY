@@ -10,10 +10,12 @@
     #include "TorchVector.hh"
     typedef float scalarType;
     typedef TorchVector vectorType;
+    typedef torch::Tensor scalarTensor;
     namespace math = torch;
 #else
     #include "ThreeVector.hh"
     typedef double scalarType;
+    typedef double scalarTensor;
     typedef ThreeVector vectorType;
     namespace math = std;
 #endif
@@ -55,7 +57,7 @@ public:
      * momentum / position / time / beam param information to be set before
      * running.
      */
-    void simulateBeam(int nPart);
+    py::tuple simulateBeam();
 
     /**
      * Sets the time parameters for tracking.
@@ -84,8 +86,8 @@ public:
      * @param position_0: Initial position of the track.
      * @param momentum_0: Initial direction of the track
      */
-    void setBeamInit(const std::vector<vectorType> &position_0, 
-        const std::vector<vectorType> &momentum_0);
+    void setBeamInit(const py::array_t<scalarType> &position_0, 
+        const py::array_t<scalarType> &momentum_0);
 
     /**
      * Sets the field container for the solver.
@@ -107,7 +109,7 @@ private:
      */
     void updateTrack(std::vector<vectorType>& position,
         std::vector<vectorType>& momentum, std::vector<vectorType>& beta,
-        int index);
+        scalarTensor gamma, int index);
 
 
     /**
@@ -116,7 +118,8 @@ private:
      * @param momentum: Current momentum of the electron.
      * @return Gradient of the position.
      */
-    vectorType pushPosition(const vectorType &momentum) const;
+    vectorType pushPosition(const vectorType &momentum, scalarTensor gamma
+        ) const;
 
     /**
      * Used to update the momentum of the electron.
@@ -125,8 +128,8 @@ private:
      * @param field: Current magnetic field experienced by the electron.
      * @return Gradient of the momentum.
      */
-    vectorType pushMomentum(const vectorType &momentum, const vectorType &field
-        ) const;
+    vectorType pushMomentum(const vectorType &momentum,
+        const vectorType &field, scalarTensor gamma) const;
 
 
     // Initial single conditions
@@ -139,8 +142,13 @@ private:
     std::vector<vectorType> m_beta;
 
     // Initial beam conditions
-    std::vector<vectorType> m_initBeamMomemtum;
     std::vector<vectorType> m_initBeamPosition;
+    std::vector<vectorType> m_initBeamMomentum;
+
+    // Saved beam data
+    std::vector<vectorType> m_beamPosition;
+    std::vector<vectorType> m_beamMomentum;
+    std::vector<vectorType> m_beamBeta;
 
     // Time paramters
     scalarType m_dt;

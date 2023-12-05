@@ -5,7 +5,9 @@ FieldBlock::FieldBlock(const vectorType& location,
 m_location(location), m_fieldStrength(fieldStrength), m_length(length), 
     m_edgeLength(edgeLength)
 {
-    m_edgeScaleFact = m_edgeLength / 1.4704685172312868;
+    m_edgeScaleFact = m_edgeLength / 1.23789045853;
+    m_constLengthHalf = 0.5 * (length - 1.2689299897 * m_edgeLength);
+
 }
 
 scalarType FieldBlock::getEdge(scalarType z) const
@@ -65,7 +67,7 @@ FieldBlock(location, fieldStrength,length, edgeLength)
 vectorType Dipole::getField(const vectorType& position) const
 {
     vectorType local_pos = position - m_location;
-    scalarType zr = std::abs(local_pos.getItem(2)) - 0.5 * m_length;
+    scalarType zr = std::abs(local_pos.getItem(2)) - m_constLengthHalf;
     if (zr < 0)
     {
         return m_fieldStrength;
