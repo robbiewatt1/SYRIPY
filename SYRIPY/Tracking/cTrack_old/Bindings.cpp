@@ -1,20 +1,8 @@
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
 #include "Track.hh"
 #include "Field.hh"
+#include "ThreeVector.hh"
 
-#ifdef USE_TORCH
-    #include "TorchVector.hh"
-    #include <torch/torch.h>
-    #include <torch/csrc/autograd/variable.h>
-    #include <torch/csrc/autograd/function.h>
-    typedef float scalarType;
-    typedef TorchVector vectorType;
-#else
-    #include "ThreeVector.hh"
-    typedef double scalarType;
-    typedef ThreeVector vectorType;
-#endif
 
 namespace py = pybind11;
 
@@ -25,15 +13,13 @@ PYBIND11_MODULE(cTrack, module)
         .def(py::init<>())
         .def("simulateTrack", &Track::simulateTrack, "Main function to"
             "simulate the track of a single electron.")
-        .def("backwardTrack", &Track::backwardTrack, "Function for performing"
-            "backpropagation of the track.")
         .def("simulateBeam", &Track::simulateBeam, "Main function to"
             "simulate a beam of particles.")
         .def("setTime", &Track::setTime, "Sets the time parameters for "
         	"the simulation")
         .def("setCentralInit", &Track::setCentralInit, "Sets the initial parameters fo r"
         	"the simulation")
-        .def("setBeamInit", &Track::setBeamInit, "Sets the beam parameters."
+        .def("setBeamParams", &Track::setBeamParams, "Sets the beam parameters."
             "for the simulation")
         .def("setField", &Track::setField, "Sets the field container for the"
             "solver.");
@@ -43,7 +29,6 @@ PYBIND11_MODULE(cTrack, module)
         .def("addElement", &FieldContainer::addElement, "Adds a field element"
             "to the container.");
 
-    py::class_<vectorType>(module, "ThreeVector")
-        .def(py::init<py::list>())
-        .def(py::init<py::list, bool>());
+    py::class_<ThreeVector>(module, "ThreeVector")
+        .def(py::init<double, double, double>());
 }

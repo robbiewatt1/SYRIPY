@@ -1,5 +1,5 @@
-from .cTrack import cTrack
 import torch
+from .cTrack import cTrack
 from typing import Optional, List
 import math
 
@@ -334,10 +334,13 @@ class FieldContainer(torch.nn.Module):
         """
         field_cont_c = cTrack.FieldContainer()
         for element in self.field_array:
-            position = cTrack.ThreeVector(element.center_pos.tolist())
-            field = cTrack.ThreeVector(element.B0.tolist())
+            position = cTrack.ThreeVector(element.center_pos[0],
+                                          element.center_pos[1],
+                                          element.center_pos[2])
+            field = cTrack.ThreeVector(element.B0[0],
+                                       element.B0[1],
+                                       element.B0[2])
             field_cont_c.addElement(element.order, position, field,
                                     element.length, element.edge_length)
 
         return field_cont_c
-

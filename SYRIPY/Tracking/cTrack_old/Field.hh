@@ -2,16 +2,8 @@
 #define FieldContainer_HH
 
 #include <vector>
+#include "ThreeVector.hh"
 
-#ifdef USE_TORCH
-    #include "TorchVector.hh"
-    typedef float scalarType;
-    typedef TorchVector vectorType;
-#else
-    #include "ThreeVector.hh"
-    typedef double scalarType;
-    typedef ThreeVector vectorType;
-#endif
 
 class FieldBlock
 {
@@ -29,8 +21,8 @@ public:
      * @param edgeLength: Length for the magnetic field to decay to 10% outside
      *      bulk of the magnet
      */
-    FieldBlock(const vectorType& location, const vectorType& fieldStrength,
-        scalarType length, scalarType edgeLength);
+    FieldBlock(const ThreeVector& location, const ThreeVector& fieldStrength,
+        double length, double edgeLength);
 
     virtual ~FieldBlock(){};
 
@@ -40,7 +32,7 @@ public:
      * @param position: Position to calculate the field at.
      * @return Magnetic field three vector.
      */
-    virtual vectorType getField(const vectorType& position) const = 0;
+    virtual ThreeVector getField(const ThreeVector& position) const = 0;
 
 
 protected:
@@ -50,15 +42,14 @@ protected:
      * @param z: Distance outside main part of magnet
      * @return Factor by which the field decays
      */
-    scalarType getEdge(scalarType z) const;
+    double getEdge(double z) const;
 
-    vectorType m_location;         // Centre point of magnet
-    vectorType m_fieldStrength;    // Field strength vector
-    scalarType m_length;                // Length of magnet
-    scalarType m_edgeLength;            // Magnet edge length
-    scalarType m_edgeScaleFact;         // Edge scaling factor
-    scalarType m_constLengthHalf;       // Half of the length where field is const
-
+    ThreeVector m_location;         // Centre point of magnet
+    ThreeVector m_fieldStrength;    // Field strength vector
+    double m_length;                // Length of magnet
+    double m_edgeLength;            // Magnet edge length
+    double m_edgeScaleFact;         // Edge scaling factor
+    double m_constLengthHalf;       // Half of the length where field is const
 };
 
 
@@ -93,9 +84,8 @@ public:
      * @param edgeLength: Length for the magnetic field to decay to 10% outside
      *      bulk of the magnet
      */
-    void addElement(int order, const vectorType& location,
-        const vectorType& fieldStrength, scalarType length,
-        scalarType edgeLength);
+    void addElement(int order, const ThreeVector& location,
+        const ThreeVector& fieldStrength, double length, double edgeLength);
 
 
     /**
@@ -104,7 +94,7 @@ public:
      * @param position: Position to calculate the field at.
      * @return Magnetic field three vector.
      */
-    vectorType getField(const vectorType& position) const;
+    ThreeVector getField(const ThreeVector& position) const;
 
 private:
     std::vector<FieldBlock*> m_fieldContainer;
@@ -125,8 +115,8 @@ public:
      * @param edgeLength: Length for the magnetic field to decay to 10% outside
      *      bulk of the magnet
      */
-    Dipole(const vectorType& location, const vectorType& fieldStrength,
-        scalarType length, scalarType edgeLength);
+    Dipole(const ThreeVector& location, const ThreeVector& fieldStrength,
+        double length, double edgeLength);
 
     ~Dipole(){};
 
@@ -137,7 +127,7 @@ public:
      * @param position: Position to calculate the field at.
      * @return Dipole field three vector.
      */
-    vectorType getField(const vectorType& position) const override;
+    ThreeVector getField(const ThreeVector& position) const override;
 
 };
 
@@ -155,8 +145,8 @@ public:
      * @param edgeLength: Length for the magnetic field to decay to 10% outside
      *      bulk of the magnet
      */
-    Quadrupole(const vectorType& location, const vectorType& fieldStrength,
-        scalarType length, scalarType edgeLength);
+    Quadrupole(const ThreeVector& location, const ThreeVector& fieldStrength,
+        double length, double edgeLength);
 
     ~Quadrupole(){};
 
@@ -167,7 +157,7 @@ public:
      * @param position: Position to calculate the field at.
      * @return Quadrupole field three vector.
      */
-    vectorType getField(const vectorType& position) const override;
+    ThreeVector getField(const ThreeVector& position) const override;
 };
 
 #endif

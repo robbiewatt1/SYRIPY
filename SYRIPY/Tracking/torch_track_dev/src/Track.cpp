@@ -24,8 +24,8 @@ py::tuple Track::simulateTrack()
 
     m_position[0] = m_initPosition;
     m_momentum[0] = m_initMomemtum;
-    m_beta[0] = m_momentum[0] / math::sqrt(c_light * c_light
-        + m_momentum[0].Magnitude2());
+    m_beta[0] = m_initMomemtum / math::sqrt(c_light * c_light
+        + m_initMomemtum.Magnitude2());
     scalarTensor gamma = math::sqrt(1. + m_initMomemtum.Magnitude2()
         / (c_light * c_light));
 
@@ -71,8 +71,8 @@ py::tuple Track::backwardTrack(py::array_t<scalarType> &positionGrad,
      // Convert to vector of Tensors
     std::vector<torch::Tensor> tensor_position(m_position.begin(),
         m_position.end());
-    std::vector<torch::Tensor> tensor_momenutm(m_momentum.begin(),
-        m_momentum.end());
+    std::vector<torch::Tensor> tensor_momenutm(m_beta.begin(),
+        m_beta.end());
     std::vector<torch::Tensor> tensor_cat = tensor_position;
     tensor_cat.insert(tensor_cat.end(), tensor_momenutm.begin(),
         tensor_momenutm.end());
@@ -80,16 +80,18 @@ py::tuple Track::backwardTrack(py::array_t<scalarType> &positionGrad,
     // Create the grad_outputs
     std::vector<torch::Tensor> grad_outputs;
     auto buffer_info = positionGrad.request();
-    for (ssize_t i = 0; i < buffer_info.shape[0]; ++i) {
-        auto sub_array = positionGrad.mutable_data(i, 0);
-        auto tensor = torch::from_blob(sub_array, {buffer_info.shape[1]}, torch::kFloat32);
-        grad_outputs.push_back(tensor.clone());
+    auto positionPtr = static_cast<scalarType*>(buffer_info.ptr);
+    for (ssize_t i = 0; i <  buffer_info.shape[0]; ++i)
+    {
+        auto tensor = vectorType(&positionPtr[i*3]);
+        grad_outputs.push_back(tensor);
     }
     buffer_info = betaGrad.request();
-    for (ssize_t i = 0; i < buffer_info.shape[0]; ++i) {
-        auto sub_array = betaGrad.mutable_data(i, 0);
-        auto tensor = torch::from_blob(sub_array, {buffer_info.shape[1]}, torch::kFloat32);
-        grad_outputs.push_back(tensor.clone());
+    auto momentumPtr = static_cast<scalarType*>(buffer_info.ptr);
+    for (ssize_t i = 0; i < buffer_info.shape[0]; ++i)
+    {
+        auto tensor = vectorType(&momentumPtr[i*3]);
+        grad_outputs.push_back(tensor);
     }
 
     std::vector<torch::Tensor> inputs = {m_initPosition, m_initMomemtum};
@@ -196,7 +198,7 @@ void Track::setBeamInit(const py::array_t<scalarType>& position_0,
     auto momentumPtr = static_cast<scalarType*>(momentumInfo.ptr);
     int n_rows = positionInfo.shape[0];
     // print the shape of position and momentum
-    
+
     for (int i = 0; i < n_rows; i++)
     {
         m_initBeamPosition.push_back(vectorType(&poisitonPtr[i*3]));

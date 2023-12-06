@@ -1,18 +1,18 @@
 #include "Field.hh"
 
-FieldBlock::FieldBlock(const vectorType& location, 
-    const vectorType& fieldStrength, scalarType length, scalarType edgeLength):
+
+FieldBlock::FieldBlock(const ThreeVector& location, 
+    const ThreeVector& fieldStrength, double length, double edgeLength):
 m_location(location), m_fieldStrength(fieldStrength), m_length(length), 
     m_edgeLength(edgeLength)
 {
     m_edgeScaleFact = m_edgeLength / 1.23789045853;
     m_constLengthHalf = 0.5 * (length - 1.2689299897 * m_edgeLength);
-
 }
 
-scalarType FieldBlock::getEdge(scalarType z) const
+double FieldBlock::getEdge(double z) const
 {
-    scalarType zp2 = z * z / (m_edgeScaleFact * m_edgeScaleFact);
+    double zp2 = z * z / (m_edgeScaleFact * m_edgeScaleFact);
     return 1. / ((1. + zp2) * (1. + zp2));
 }
 
@@ -20,9 +20,8 @@ scalarType FieldBlock::getEdge(scalarType z) const
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
 */
 
-void FieldContainer::addElement(int order, const vectorType& location,
-        const vectorType& fieldStrength, scalarType length,
-        scalarType edgeLength)
+void FieldContainer::addElement(int order, const ThreeVector& location,
+        const ThreeVector& fieldStrength, double length, double edgeLength)
 {
     //FieldBlock element;
     if (order == 1) // dipole
@@ -44,10 +43,10 @@ void FieldContainer::addElement(int order, const vectorType& location,
     
 }
 
-vectorType FieldContainer::getField(const vectorType& position) const
+ThreeVector FieldContainer::getField(const ThreeVector& position) const
 {
-    vectorType field = m_fieldContainer[0]->getField(position);
-    for (long unsigned int i = 1; i < m_fieldContainer.size(); i++)
+    ThreeVector field;
+    for (long unsigned int i = 0; i < m_fieldContainer.size(); i++)
     {
         field = field + m_fieldContainer[i]->getField(position);
     }
@@ -58,16 +57,16 @@ vectorType FieldContainer::getField(const vectorType& position) const
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
 */
 
-Dipole::Dipole(const vectorType& location, const vectorType& fieldStrength,
-        scalarType length, scalarType edgeLength):
+Dipole::Dipole(const ThreeVector& location, const ThreeVector& fieldStrength,
+        double length, double edgeLength):
 FieldBlock(location, fieldStrength,length, edgeLength)
 {
 }
 
-vectorType Dipole::getField(const vectorType& position) const
+ThreeVector Dipole::getField(const ThreeVector& position) const
 {
-    vectorType local_pos = position - m_location;
-    scalarType zr = std::abs(local_pos.getItem(2)) - m_constLengthHalf;
+    ThreeVector local_pos = position - m_location;
+    double zr = std::abs(local_pos[2]) - m_constLengthHalf;
     if (zr < 0)
     {
         return m_fieldStrength;
@@ -82,19 +81,17 @@ vectorType Dipole::getField(const vectorType& position) const
 */
 
 
-Quadrupole::Quadrupole(const vectorType& location,
-    const vectorType& fieldStrength, scalarType length, scalarType edgeLength):
+Quadrupole::Quadrupole(const ThreeVector& location,
+    const ThreeVector& fieldStrength, double length, double edgeLength):
 FieldBlock(location, fieldStrength,length, edgeLength)
 {
 }
 
-vectorType Quadrupole::getField(const vectorType& position) const
+ThreeVector Quadrupole::getField(const ThreeVector& position) const
 {
-    vectorType local_pos = position - m_location;
-    vectorType s_pos = vectorType({local_pos.getItem(1), local_pos.getItem(0),
-        local_pos.getItem(2)});
-    
-    scalarType zr = std::abs(local_pos.getItem(2)) - 0.5 * m_length;
+    ThreeVector local_pos = position - m_location;
+    ThreeVector s_pos = ThreeVector(local_pos[1], local_pos[0], local_pos[2]);
+    double zr = std::abs(local_pos[2]) - 0.5 * m_length;
     if (zr < 0.)
     {
         return m_fieldStrength * s_pos;

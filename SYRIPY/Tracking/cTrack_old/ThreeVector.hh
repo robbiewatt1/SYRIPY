@@ -4,11 +4,8 @@
 #include <iostream>
 #include <cmath>
 #include <cassert>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
 
-namespace py = pybind11;
-
+#include "ThreeMatrix.hh"
 
 class ThreeVector
 {
@@ -21,31 +18,11 @@ public:
 	// Default Constructor
 	ThreeVector()
 	{
-		
-		//m_data[0] = 0;
-		//m_data[1] = 0;
-		//m_data[2] = 0;
-	}
+		m_data[0] = 0;
+		m_data[1] = 0;
+		m_data[2] = 0;
 
-	// Constructor for consisency with torch
-	ThreeVector(std::initializer_list<double> initializerList)
-	{
-		assert(initializerList.size() == 3);
-		size_t i = 0;
-        for (const auto& element : initializerList) {
-            m_data[i++] = element;
-        }
 	}
-
-    // Constructor for consisency with torch. just takes an initializer list and passes it to the torch::tensor init
-    ThreeVector(const py::list& initializerList, bool requires_grad=true)
-    {
-        assert (initializerList.size() == 3);
-		auto vec = initializerList.cast<std::vector<double>>();
-		m_data[0] = vec[0];
-		m_data[1] = vec[1];
-		m_data[2] = vec[2];
-    }
 
 	// Copy constructor
 	ThreeVector(const ThreeVector &vector)
@@ -61,14 +38,6 @@ public:
 		m_data[0] = x;
 		m_data[1] = y;
 		m_data[2] = z;
-	}
-
-	// Bad init constructor
-	ThreeVector(double* ptr)
-	{
-		m_data[0] = ptr[0];
-		m_data[1] = ptr[1];
-		m_data[2] = ptr[2];
 	}
 
 	~ThreeVector()
@@ -95,9 +64,9 @@ public:
 		return newVector;
 	}
 
-	ThreeVector Unit() const
+	ThreeVector Norm() const
 	{
-		return *this / Magnitude();
+		return *this / Mag();
 	}
 
 	// Returns the dot product
@@ -108,13 +77,13 @@ public:
 	}
 
 	// Returns the magnitude
-	double Magnitude() const
+	double Mag() const
 	{
 		return std::sqrt(Dot(*this));
 	}
 
 	// Returns the magnitude squared
-	double Magnitude2() const
+	double Mag2() const
 	{
 		return Dot(*this);
 	}
@@ -126,9 +95,42 @@ public:
 		dir[0] = point[0] - m_data[0];
 		dir[1] = point[1] - m_data[1];
 		dir[2] = point[2] - m_data[2];
-		dir.Unit();
+		dir.Norm();
 		return dir;
 	}
+
+	// Returns the matrix required to rotate the vector onto the second
+	ThreeMatrix RotateToAxis(const ThreeVector& axis) const
+	{
+		ThreeMatrix rotation;
+		// Fist we need to check if the vectors are anti parallel as this method fails
+		if ((this->Norm() + axis.Norm()).Mag2() <= 1e-10)
+		{
+			rotation[0][0] = -1.0;
+			rotation[1][1] =  1.0;
+			rotation[2][2] = -1.0;
+		} else
+		{
+			ThreeVector norm1 = this->Norm();
+			ThreeVector norm2 = axis.Norm();
+			ThreeVector crossVec = norm1.Cross(norm2);
+
+			double cos = norm1.Dot(norm2);
+			ThreeMatrix skewMat;
+			skewMat[0][1] = -crossVec[2];
+			skewMat[0][2] =  crossVec[1];
+			skewMat[1][0] =  crossVec[2];
+			skewMat[1][2] = -crossVec[0];
+			skewMat[2][0] = -crossVec[1];
+			skewMat[2][1] =  crossVec[0];
+
+			ThreeMatrix ident;
+			ident.Identity();
+			rotation = ident + skewMat + skewMat * skewMat * (1.0 / (1.0 + cos));
+		}
+		return rotation;
+	}
+
 
 	// Returns the value of the vector at elementIndex. This method allows 
 	// you to edit the vector data.
@@ -143,17 +145,6 @@ public:
 	{
 		assert(index >= 0 && index < 3);
 		return m_data[index];
-	}
-
-	double getItem(unsigned int index) const
-    {
-        return m_data[index];
-    }
-
-	template<class T>
-	T* data_ptr()
-	{
-		return m_data;
 	}
 
 	// Copy vector to new vector
@@ -285,6 +276,20 @@ public:
 		newVector.m_data[2] = vector.m_data[2] / scalar;
 		return newVector;
 	};
+
+	friend ThreeVector operator*(const ThreeMatrix &matrix, const ThreeVector &vector)
+	{
+		ThreeVector newVector;
+		for (unsigned int i = 0; i < 3; i++)
+		{
+			for (unsigned int j = 0; j < 3; j++)
+			{
+				newVector[i] += matrix[i][j] * vector[j];
+
+			}
+		}
+		return newVector;
+	}
 
 private:
 	double m_data[3];
