@@ -6,7 +6,7 @@ import torch
 from torch.profiler import profile, ProfilerActivity
 import matplotlib.pyplot as plt
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 # Define the field
 d0 = Dipole(torch.tensor([-0.1156, 0, 0]),      # Location (m)
@@ -22,12 +22,12 @@ field = FieldContainer([d0, d1, d2])
 
 
 # Define the central track and beam moments
-gamma = torch.tensor([339.3 / 0.51099890221])  # Lorentz factor
-d0 = torch.tensor([-0e-3, 0e-3, 1])            # Initial direction
-r0 = torch.tensor([-0.0913563873, 0, -1])      # Initial position (m)
-time = torch.linspace(0, 14, 1001)             # Time array samples (ns)
+gamma = torch.tensor([339.3 / 0.51099890221])      # Lorentz factor
+p0 = torch.tensor([0., 0., 1.]) * gamma * 0.29979  # Initial direction
+r0 = torch.tensor([-0.0913563873, 0, -1])          # Initial position (m)
+time = torch.linspace(0, 14, 1001)                 # Time array samples (ns)
 
-moments = np.array([10e-6,     # x (m)
+moments = torch.tensor([10e-6,     # x (m)
                     20e-6,     # x-xp (m rad)**0.5
                     200e-6,    # xp (rad)
                     100e-6,    # y (m)
@@ -37,9 +37,9 @@ moments = np.array([10e-6,     # x (m)
                     1.0])**2.  # energy (m_e)
 
 track = Track(field, device=device)
-track.set_central_params(r0, d0, gamma)
+track.set_central_params(r0, p0)
 track.set_beam_params(moments)
-track.sim_beam_c(500000, time)
+track.sim_beam_c(time, 500000)
 
 # Define the initial wavefront
 wavefnt = Wavefront(2.786062584928902,             # z position of the wavefront (m)
@@ -66,16 +66,16 @@ def solver_func(index):
 
 # batch and trace the solver function
 batch_func = torch.func.vmap(solver_func)
-solver_trace = torch.jit.trace(batch_func, torch.arange(5000))
+solver_trace = torch.jit.trace(batch_func, torch.arange(2500))
 
 # Warm up the solver
-solver_trace(torch.arange(5000))
-solver_trace(torch.arange(5000))
+solver_trace(torch.arange(2500))
+solver_trace(torch.arange(2500))
 
 
 def time_func(intensity):
-    for i in range(100):
-        intensity += torch.mean(solver_trace(torch.arange(i*5000, (i+1)*5000)),
+    for i in range(200):
+        intensity += torch.mean(solver_trace(torch.arange(i*2500, (i+1)*2500)),
                                 dim=0)
     torch.cuda.synchronize()
     return intensity / 100

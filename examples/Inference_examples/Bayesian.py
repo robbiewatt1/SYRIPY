@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 # inference. Pyro, Seaborn and Pandas are not part of the package requirements
 # and need to be installed separately.
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 class ForwardModel:
@@ -40,11 +40,11 @@ class ForwardModel:
 
         # First we set up the magnetic field
         dipole0 = Dipole(torch.tensor([0, 0, 0]), 0.203274830142196,
-                         torch.tensor([0, 0.49051235, 0]), None, 0.05, device)
+                         torch.tensor([0, 0.49051235, 0]), None, 0.05)
         dipole1 = Dipole(torch.tensor([0, 0, 1.0334]), 0.203274830142196,
-                         torch.tensor([0, -0.49051235, 0]), None, 0.05, device)
+                         torch.tensor([0, -0.49051235, 0]), None, 0.05)
         dipole2 = Dipole(torch.tensor([0, 0, 2.0668]), 0.203274830142196,
-                         torch.tensor([0, -0.49051235, 0]), None, 0.05, device)
+                         torch.tensor([0, -0.49051235, 0]), None, 0.05)
         self.field = FieldContainer([dipole0, dipole1, dipole2])
 
         # Define a simple optics beamline with an aperture and a
@@ -60,7 +60,8 @@ class ForwardModel:
 
         # Define the track / wavefront  / solver classes for the simulation
         self.track = Track(self.field, device=device)
-        self.track = torch.jit.script(self.track)
+        print(self.track.device)
+        #self.track = torch.jit.script(self.track)
         self.wavefront = Wavefront(3.086, 3.77e5,
                                    [-0.02, 0.02, -0.02, 0.02],
                                    [300, 1], device=device)
@@ -149,7 +150,7 @@ if __name__ == "__main__":
     intensity = intensity / torch.trapz(intensity)
 
     # Add some noise to the data
-    intensity = torch.normal(intensity, 0.01).to("cpu")
+    intensity = torch.normal(intensity, 0.001).to("cpu")
 
     # Check what the mock data looks like
     fig, ax = plt.subplots(figsize=(4, 3))

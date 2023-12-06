@@ -13,22 +13,22 @@ dipole_edge = 0.05     # Dipole edge length (m)
 
 
 dipole0 = Dipole(torch.tensor([0, 0, -3]), dipole_l,
-                 torch.tensor([0, dipole_b, 0]), None, dipole_edge, device)
+                 torch.tensor([0, dipole_b, 0]), None, dipole_edge)
 dipole1 = Dipole(torch.tensor([0, 0, -0.45]), dipole_l,
-                 torch.tensor([0, -dipole_b, 0]), None, dipole_edge, device)
+                 torch.tensor([0, -dipole_b, 0]), None, dipole_edge)
 dipole2 = Dipole(torch.tensor([0, 0, 0.6]), dipole_l,
-                 torch.tensor([0, -dipole_b, 0]), None, dipole_edge, device)
+                 torch.tensor([0, -dipole_b, 0]), None, dipole_edge)
 field = FieldContainer([dipole0, dipole1, dipole2])
 
-gamma = torch.tensor([340. / 0.51099890221])  # Lorentz factor
-d0 = torch.tensor([0, 0e-3, 1])               # Initial direction
-r0 = torch.tensor([-0.225679, 0, -4])         # Initial position
-time = torch.linspace(0, 18, 2001)            # Time array samples (ns)
+gamma = torch.tensor([340. / 0.51099890221])       # Lorentz factor
+p0 = torch.tensor([0., 0., 1.]) * gamma * 0.29979  # Initial momentum
+r0 = torch.tensor([-0.225679, 0, -4])              # Initial position
+time = torch.linspace(0, 18, 2001)                 # Time array samples (ns)
 
 # Define tracking class and track (using c++ implementation, faster but can't
 # do gradients)
 track = Track(field, device=device)
-track.set_central_params(r0, d0, gamma)
+track.set_central_params(r0, p0)
 track.sim_central_c(time)
 track.plot_track([2, 0])
 
