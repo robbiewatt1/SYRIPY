@@ -169,15 +169,15 @@ class SplitSolver(torch.nn.Module):
                 cumulative_obj.repeat(3, 1), self.track.beta[:, t_0:t_1]
                 )(track_samples.repeat(3, 1))
 
-            # If bunch track exists then also down sample
-            if self.track.bunch_r.shape[0] != 0:
-                n = self.track.bunch_r.shape[:2]
-                self.track.bunch_r = CubicInterp(
-                  cumulative_obj.repeat(*n, 1), self.track.bunch_r[..., t_0:t_1]
+            # If beam track exists then also down sample
+            if self.track.beam_r.shape[0] != 0:
+                n = self.track.beam_r.shape[:2]
+                self.track.beam_r = CubicInterp(
+                  cumulative_obj.repeat(*n, 1), self.track.beam_r[..., t_0:t_1]
                   )(track_samples.repeat(*n, 1))
-                self.track.bunch_beta = CubicInterp(
+                self.track.beam_beta = CubicInterp(
                     cumulative_obj.repeat(*n, 1),
-                    self.track.bunch_beta[..., t_0:t_1]
+                    self.track.beam_beta[..., t_0:t_1]
                     )(track_samples.repeat(*n, 1))
 
         else:  # Use nearest neighbour interpolation
@@ -192,11 +192,11 @@ class SplitSolver(torch.nn.Module):
             self.track.r = self.track.r[:, t_0:t_1][:, sample_index]
             self.track.beta = self.track.beta[:, t_0:t_1][:, sample_index]
 
-            # If bunch track exists then also down sample
-            if self.track.bunch_r.shape[0] != 0:
-                self.track.bunch_r = self.track.bunch_r[..., t_0:t_1][
+            # If beam track exists then also down sample
+            if self.track.beam_r.shape[0] != 0:
+                self.track.beam_r = self.track.beam_r[..., t_0:t_1][
                     ..., sample_index]
-                self.track.bunch_beta = self.track.bunch_beta[..., t_0:t_1][
+                self.track.beam_beta = self.track.beam_beta[..., t_0:t_1][
                     ..., sample_index]
 
         # Update split index for new track samples and set time to start at 0
@@ -215,12 +215,12 @@ class SplitSolver(torch.nn.Module):
                     color="blue")
 
     @torch.jit.export
-    def solve_field(self, bunch_index: int = -1, solve_ends: bool = True
+    def solve_field(self, beam_index: int = -1, solve_ends: bool = True
                     ) -> Tuple[Wavefront, Wavefront]:
         """
         Splits the track into two parts at time index closest to split_time and
         calculates a separate field for both parts of the track.
-        :param bunch_index: Batch tensor of indices to be solved.
+        :param beam_index: Batch tensor of indices to be solved.
          expansion to solve the ends of the integral.
         :param solve_ends: If true then ends of the
         :return: (wavefront_1, wavefront_2) with updated field array
@@ -230,7 +230,7 @@ class SplitSolver(torch.nn.Module):
             raise Exception("Set_track function must be called before field"
                             " can be calculated")
 
-        if bunch_index == -1:
+        if beam_index == -1:
             if self.track.r.shape[0] == 0:
                 raise Exception(
                     "Cannot calculate particle field because track hasn't "
@@ -241,15 +241,15 @@ class SplitSolver(torch.nn.Module):
             beta = self.track.beta
             gamma = self.track.gamma
         else:
-            if self.track.bunch_r.shape[0] == 0:
+            if self.track.beam_r.shape[0] == 0:
                 raise Exception(
-                    "Cannot calculate bunch sample field because bunch tracks "
-                    "haven't been simulated yet. Please simulate bunch track "
-                    "with  track.sim_bunch_c() or track.sim_bunch() before "
+                    "Cannot calculate beam sample field because beam tracks "
+                    "haven't been simulated yet. Please simulate beam track "
+                    "with  track.sim_beam_c() or track.sim_beam() before "
                     "trying to solve field.")
-            r = self.track.bunch_r[bunch_index]
-            beta = self.track.bunch_beta[bunch_index]
-            gamma = self.track.bunch_gamma[bunch_index]
+            r = self.track.beam_r[beam_index]
+            beta = self.track.beam_beta[beam_index]
+            gamma = self.track.beam_gamma[beam_index]
 
         return self._solve_field(self.track.time, r, beta, gamma, solve_ends,
                                  solve_ends)
