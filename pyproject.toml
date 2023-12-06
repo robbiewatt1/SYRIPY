@@ -5,5 +5,5 @@ requires = [
     "pybind11",
     "cmake",
     "scikit-build",
-    "eigen"
+    "torch"
 ]
