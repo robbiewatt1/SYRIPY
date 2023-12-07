@@ -63,8 +63,10 @@ class SplitSolver(torch.nn.Module):
     def set_track(self, new_samples: int, t_split: float,
                   t_start: Optional[float] = None,
                   t_end: Optional[float] = None,
-                  n_sample: Optional[float] = None, flat_power: float = 0.25,
-                  mode: str = "nn", plot_track: bool = False) -> None:
+                  n_sample_x: Optional[float] = None,
+                  n_sample_y: Optional[float] = None,
+                  flat_power: float = 0.25, mode: str = "nn",
+                  plot_track: bool = False) -> None:
         """
         Calculates the split index of the track and sets the track samples
         based on large values of objective function obj = |grad(1/grad(g))|.
@@ -76,7 +78,9 @@ class SplitSolver(torch.nn.Module):
          time of original track will be used.
         :param t_end: End time for integration. If t_end=None end time of
          original track will be used.
-        :param n_sample: Approximate number of test sample points along x
+        :param n_sample_x: Approximate number of test sample points along x
+         dimension.
+        :param n_sample_y: Approximate number of test sample points along y
          dimension.
         :param flat_power: Power to which the objective function is raised. This
          increases the number of samples in the noisy bit.
@@ -98,10 +102,15 @@ class SplitSolver(torch.nn.Module):
         # Reset the wavefront
         self.wavefront.reset()
 
-        if n_sample is not None:
-            sample_rate = int(self.wavefront.n_samples_xy[0] / n_sample)
+        if n_sample_x is not None:
+            sample_rate_x = int(self.wavefront.n_samples_xy[0] / n_sample_x)
         else:
-            sample_rate = 1
+            sample_rate_x = 1
+
+        if n_sample_y is not None:
+            sample_rate_y = int(self.wavefront.n_samples_xy[1] / n_sample_y)
+        else:
+            sample_rate_y = self.wavefront.n_samples_xy[1]
 
         # Set time start / end and find the closest indexes
         if t_start is None:
@@ -114,10 +123,11 @@ class SplitSolver(torch.nn.Module):
                                              - t_split))
 
         # Calculate grad(1/ grad(phi)) at sample_x points.
-        start_index = self.wavefront.n_samples_xy[1] // 2
-        r_obs = self.wavefront.coords[
-                :, start_index::self.wavefront.n_samples_xy[1]*sample_rate,
-                None] - self.track.r[:, None, t_0:t_1]
+        sample_coords = self.wavefront.coords.reshape(
+            3, self.wavefront.n_samples_xy[0], self.wavefront.n_samples_xy[1]
+        )[:, sample_rate_x//2::sample_rate_x, sample_rate_y//2::sample_rate_y]
+        r_obs = (sample_coords.flatten(1, 2)[:, :, None]
+                 - self.track.r[:, None, t_0:t_1])
 
         rb_xy = torch.sum(r_obs[:2] * self.track.beta[:2, None, t_0:t_1], dim=0)
         r2_xy = torch.sum(r_obs[:2] * r_obs[:2], dim=0)

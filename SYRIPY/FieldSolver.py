@@ -53,7 +53,8 @@ class FieldSolver(torch.nn.Module):
     @torch.jit.ignore
     def set_track(self, new_samples: int, t_start: Optional[float] = None,
                   t_end: Optional[float] = None,
-                  n_sample: Optional[float] = None,
+                  n_sample_x: Optional[float] = None,
+                  n_sample_y: Optional[float] = None,
                   flat_power: float = 0.25, mode: str = "nn") -> None:
         """
         Sets the track samples based on large values of objective function
@@ -65,7 +66,9 @@ class FieldSolver(torch.nn.Module):
          time of original track will be used.
         :param t_end: End time for integration. If t_end=None end time of
          original track will be used.
-        :param n_sample: Approximate number of test sample points along x
+        :param n_sample_x: Approximate number of test sample points along x
+         dimension.
+        :param n_sample_y: Approximate number of test sample points along x
          dimension.
         :param flat_power: Power to which the objective function is raised. This
          increases the number of samples in the noisy bit.
@@ -85,25 +88,25 @@ class FieldSolver(torch.nn.Module):
         # Reset the wavefront
         self.wavefront.reset()
 
-        if n_sample is not None:
-            sample_rate = int(self.wavefront.n_samples_xy[0] / n_sample)
+        if n_sample_x is not None:
+            sample_rate_x = int(self.wavefront.n_samples_xy[0] / n_sample_x)
         else:
-            sample_rate = 1
+            sample_rate_x = 1
 
-        # Set time start / end and find the closest indexes
-        if t_start is None:
-            t_start = self.track.time[0]
-        if t_end is None:
-            t_end = self.track.time[-1]
+        if n_sample_y is not None:
+            sample_rate_y = int(self.wavefront.n_samples_xy[1] / n_sample_y)
+        else:
+            sample_rate_y = self.wavefront.n_samples_xy[1]
 
         t_0 = torch.argmin(torch.abs(self.track.time - t_start))
         t_1 = torch.argmin(torch.abs(self.track.time - t_end)) + 1
 
         # Calculate grad(1/ grad(phi)) at sample_x points.
-        start_index = self.wavefront.n_samples_xy[1] // 2
-        r_obs = self.wavefront.coords[
-                :, start_index::self.wavefront.n_samples_xy[1]*sample_rate,
-                None] - self.track.r[:, None, t_0:t_1]
+        sample_coords = self.wavefront.coords.reshape(
+            3, self.wavefront.n_samples_xy[0], self.wavefront.n_samples_xy[1]
+        )[:, sample_rate_x//2::sample_rate_x, sample_rate_y//2::sample_rate_y]
+        r_obs = (sample_coords.flatten(1, 2)[:, :, None]
+                 - self.track.r[:, None, t_0:t_1])
 
         rb_xy = torch.sum(r_obs[:2] * self.track.beta[:2, None, t_0:t_1], dim=0)
         r2_xy = torch.sum(r_obs[:2] * r_obs[:2], dim=0)
@@ -248,6 +251,7 @@ class FieldSolver(torch.nn.Module):
         """
         return self._solve_field(time, r, beta, gamma, solve_ends, solve_ends)
 
+    '''
     @torch.jit.export
     def solve_field_split(self, beam_index: int = -1, split_time: float = 0,
                           plot_track: bool = False):
@@ -308,6 +312,7 @@ class FieldSolver(torch.nn.Module):
             return wavefront_1, wavefront_2, (fig, ax)
         else:
             return wavefront_1, wavefront_2
+    '''
 
     @torch.jit.export
     def _solve_field(self, time: torch.Tensor, r: torch.Tensor,
