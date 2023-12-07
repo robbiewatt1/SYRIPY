@@ -52,7 +52,7 @@ class FieldBlock(torch.nn.Module):
         """
         return b[None] / (1 + (z[:, None] / self.edge_scaled)**2.)**2.
 
-    def switch_device(self, device):
+    def switch_device(self, device: torch.device) -> None:
         """
         Switches the device of the field.
         :param device: Device to switch to.
@@ -160,7 +160,7 @@ class FieldContainer(torch.nn.Module):
             field += element.get_field(position)
         return field
 
-    def switch_device(self, device):
+    def switch_device(self, device: torch.device) -> None:
         """
         Switches the device of the field.
         :param device: Device to switch to.

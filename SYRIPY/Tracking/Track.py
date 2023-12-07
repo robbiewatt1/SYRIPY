@@ -291,7 +291,7 @@ class Track(torch.nn.Module):
                                    device=device)
         self.beam_r[:, 0] = beam_r
         self.beam_p[:, 0] = beam_p
-        self.beam_g = (torch.sum(beam_p * beam_p, dim=1)
+        self.beam_gamma = (torch.sum(beam_p * beam_p, dim=1)
                         / self.c_light**2. + 1.)**0.5
         
         for i, t in enumerate(time[:-1]):
@@ -330,10 +330,10 @@ class Track(torch.nn.Module):
 
         self.r = torch.mean(self.beam_r, dim=0).to(self.device).T
         self.beta = torch.mean(self.beam_beta, dim=0).to(self.device).T
-        self.gamma = torch.mean(self.beam_g, dim=0).to(self.device)
+        self.gamma = torch.mean(self.beam_gamma, dim=0).to(self.device)
         self.beam_r = self.beam_r.permute((0, 2, 1)).to(self.device)
         self.beam_beta = self.beam_beta.permute((0, 2, 1)).to(self.device)
-        self.beam_gamma = self.beam_g.to(self.device)
+        self.beam_gamma = self.beam_gamma.to(self.device)
         self.time = self.time.to(self.device)
 
     @torch.jit.ignore
@@ -395,7 +395,7 @@ class Track(torch.nn.Module):
                 if n_part is None:
                     raise TypeError("Number of particles has not been set.")
                 beam_r, beam_p = self._sample_beam(n_part)
-        self.beam_g = (torch.sum(beam_p * beam_p, dim=1)
+        beam_gamma = (torch.sum(beam_p * beam_p, dim=1)
                 / self.c_light**2. + 1.)**0.5
 
         if time.shape[0] % 2 == 0:
@@ -416,15 +416,13 @@ class Track(torch.nn.Module):
             torch.get_default_dtype()).to(self.device)
         self.beam_beta = beam_beta.permute((0, 2, 1)).type(
             torch.get_default_dtype()).to(self.device)
-        self.beam_gamma = self.beam_g.to(self.device)
+        self.beam_gamma = beam_gamma.to(self.device)
         self.r = torch.mean(self.beam_r, dim=0)
         self.beta = torch.mean(self.beam_beta, dim=0)
-        self.gamma = torch.mean(self.beam_g, dim=0)
+        self.gamma = torch.mean(beam_gamma, dim=0)
         self.time = self.time.to(self.device)
 
-
-    def _sample_beam(self, n_part: int) -> Tuple[torch.Tensor, torch.Tensor,
-                                                 torch.Tensor]:
+    def _sample_beam(self, n_part: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Samples the beam using the beam moments. Beam moments must be set
         before calling this function.
