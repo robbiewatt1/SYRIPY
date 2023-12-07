@@ -170,7 +170,7 @@ class Track(torch.nn.Module):
         return self.beam_matrix
 
     @torch.jit.export
-    def sim_central(self, time: torch.Tensor, use_gpu=False) -> None:
+    def sim_central(self, time: torch.Tensor, use_gpu: bool = False) -> None:
         """
         Models the trajectory of a single particle through a field defined
         by field_container
@@ -248,7 +248,7 @@ class Track(torch.nn.Module):
     def sim_beam(self, time: torch.Tensor, n_part: Optional[int] = None,
                  beam_r: Optional[torch.Tensor] = None,
                  beam_p: Optional[torch.Tensor] = None,
-                 use_gpu=False) -> None:
+                 use_gpu: bool = False) -> None:
         """
         Models the trajectory of a beam of particle through a field defined
         by field_container (cpp version should be much-much faster). If beam_r,
