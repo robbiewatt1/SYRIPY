@@ -50,6 +50,7 @@ class Wavefront(torch.nn.Module):
                                   dim=0).flatten(1, 2)
         self.field = torch.zeros((dims, self.n_samples), dtype=torch.cfloat,
                                  device=device)
+        self.source_location = torch.tensor([])
 
         # Save the initial values in case we need to
         self.z_0 = z
@@ -101,6 +102,7 @@ class Wavefront(torch.nn.Module):
             = self.field.reshape(self.dims, x_size_old, y_size_old)
         self.field = new_field.flatten(1, 2)
 
+    @torch.jit.export
     def interpolate_wavefront(self, fact: Optional[int] = None,
                               new_axes: Optional[List[torch.Tensor]] = None
                               ) -> None:
