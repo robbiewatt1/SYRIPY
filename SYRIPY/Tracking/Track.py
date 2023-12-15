@@ -146,7 +146,7 @@ class Track(torch.nn.Module):
         """
         if beam_moments.shape[0] != 8:
             raise Exception("Beam moments must be of shape [8,]")
-        self.beam_params = beam_moments
+        self.beam_params = beam_moments.to(self.device)
         self.beam_matrix = torch.zeros((6, 6), device=self.device)
         self.beam_matrix[0, 0] = beam_moments[0]
         self.beam_matrix[0, 1] = beam_moments[1]
@@ -168,6 +168,12 @@ class Track(torch.nn.Module):
         if self.beam_matrix is None:
             raise Exception("Beam matrix has not been set.")
         return self.beam_matrix
+
+    @torch.jit.export
+    def get_transport_matrix(self, start_z: float, end_z: float
+                             ) -> torch.Tensor:
+        return self.field_container.get_transport_matrix(
+            start_z, end_z, self.gamma).to(self.device)
 
     @torch.jit.export
     def sim_central(self, time: torch.Tensor, use_gpu: bool = False) -> None:

@@ -168,8 +168,8 @@ class FieldContainer(torch.nn.Module):
         for element in self.field_array:
             element.switch_device(device)
 
-    def get_transport_matrix(self, start_z: float, end_z: float, gamma: float
-                             ) -> torch.Tensor:
+    def get_transport_matrix(self, start_z: float, end_z: float,
+                             gamma: torch.Tensor ) -> torch.Tensor:
         """
         Calculates the linear transport matrix for a given position. Only works
         for dispersion in x.
@@ -178,6 +178,8 @@ class FieldContainer(torch.nn.Module):
         :param gamma: Beam design energy.
         :return: Both x and y beam matrix.
         """
+
+        # TODO: I don't think this return differentiable tensors
 
         # Check element array is not empty
         if len(self.field_array) == 0:
