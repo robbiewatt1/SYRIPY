@@ -103,19 +103,19 @@ class Wavefront(torch.nn.Module):
         self.field = new_field.flatten(1, 2)
 
     @torch.jit.export
-    def interpolate_wavefront(self, fact: Optional[int] = None,
-                              new_axes: Optional[List[torch.Tensor]] = None
-                              ) -> None:
+    def interpolate_wavefront(self, fact: int = 1,
+                              new_axes: Tuple[torch.Tensor, torch.Tensor]
+                              = (None, None)) -> None:
         """
         Increases the wavefront resolution using interpolation.
         :param fact: Factor to increase resolution by
         :param new_axes: New axes to interpolate to [x_axis, y_axis]
         """
-        if fact is None and new_axes is None:
+        if fact == 1 and new_axes[0] is None:
             raise Exception("Must specify either factor or new axes")
-        elif fact is not None and new_axes is not None:
+        elif fact != 1 and new_axes[0] is not None:
             raise Exception("Can't specify both factor and new axes")
-        elif fact is not None:
+        elif fact != 1:
             new_x_axis = torch.linspace(self.wf_bounds[0], self.wf_bounds[1],
                                         self.n_samples_xy[0] * fact,
                                         device=self.device)
@@ -133,8 +133,10 @@ class Wavefront(torch.nn.Module):
         self.n_samples_xy = [new_x_axis.shape[0], new_y_axis.shape[0]]
         self.n_samples = self.n_samples_xy[0] * self.n_samples_xy[1]
 
-        self.wf_bounds = [new_x_axis[0], new_x_axis[-1],
-                          new_y_axis[0], new_y_axis[-1]]
+        self.wf_bounds = [float(new_x_axis[0].item()),
+                          float(new_x_axis[-1].item()),
+                          float(new_y_axis[0].item()),
+                          float(new_y_axis[-1].item())]
 
         self.delta = [(self.wf_bounds[1] - self.wf_bounds[0])
                       / self.n_samples_xy[0],
@@ -149,8 +151,10 @@ class Wavefront(torch.nn.Module):
                                    self.z * torch.ones_like(self.x_array)),
                                   dim=0).flatten(1, 2)
 
-    def add_field(self, wavefront: Wavefront, new_bounds: List[float] = None,
-                  new_shape: Optional[List[int]] = None) -> None:
+    @torch.jit.export
+    def add_field(self, wavefront: Wavefront,
+                  new_shape: Tuple[int, int] = (0, 0),
+                  new_bounds: Optional[List[float]] = None) -> None:
         """
         Adds wavefront field to current field value. Uses current wavefront
         shape unless new shape is specified
@@ -163,15 +167,15 @@ class Wavefront(torch.nn.Module):
             raise Exception("Only wavefronts at the same z location can be "
                             "summed.")
 
-        if (new_bounds is None and new_shape is not None or
-                new_bounds is not None and new_shape is None):
+        if (new_bounds is None and new_shape[0] != 0 or
+                new_bounds is not None and new_shape[0] == 0):
             raise Exception("Must specify new shape and new bounds if "
                             "changing wavefront dimensions")
 
         # Check if we can just add fields or need to do some interpolation
         if (self.wf_bounds == wavefront.wf_bounds and
             self.n_samples_xy == wavefront.n_samples_xy and
-                (new_bounds or new_shape) is None):
+                (new_bounds is None or new_shape[0] == 0)):
             self.field = self.field + wavefront.field
         else:
             # check if we are using current wavefront bounds or new one
@@ -183,8 +187,9 @@ class Wavefront(torch.nn.Module):
                                             new_shape[0], device=self.device)
                 new_y_axis = torch.linspace(new_bounds[2], new_bounds[3],
                                             new_shape[1], device=self.device)
-                self.interpolate_wavefront(new_axes=[new_x_axis, new_y_axis])
-            wavefront.interpolate_wavefront(new_axes=[new_x_axis, new_y_axis])
+                self.interpolate_wavefront(1, new_axes=(new_x_axis, new_y_axis))
+            wavefront.interpolate_wavefront(
+                1, new_axes=(new_x_axis, new_y_axis))
             self.field = self.field + wavefront.field
 
     @torch.jit.export
@@ -289,6 +294,7 @@ class Wavefront(torch.nn.Module):
                          dim=0).reshape(self.n_samples_xy[0],
                                         self.n_samples_xy[1])
 
+    @torch.jit.ignore
     def plot_intensity(self, log_plot: Optional[bool] = False,
                        ds_fact: int = 1, axes_lim: Optional[List[float]] = None,
                        lineout: Optional[List[int]] = None,
