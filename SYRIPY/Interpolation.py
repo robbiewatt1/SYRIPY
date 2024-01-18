@@ -19,10 +19,9 @@ class NearestInterp:
         self.field = field
 
         # Get batch size
-        if len(field.shape) == 2:
-            self.batch_size = 1
-        else:
-            self.batch_size = field.shape[0]
+        if len(self.field.shape) == 2:
+            self.field = torch.unsqueeze(self.field, 0)
+        self.batch_size = field.shape[0]
 
     def __call__(self, new_x_axis: torch.Tensor, new_y_axis: torch.Tensor
                  ) -> torch.Tensor:
@@ -49,7 +48,7 @@ class NearestInterp:
                               torch.lt(y_idx, self.y_axis.shape[0])))
 
         # Get the field values of the points to interpolate to
-        f_interp = torch.where(interp_bool, self.field[..., x_idx, y_idx], 0)
+        f_interp = torch.where(interp_bool, self.field[:, x_idx, y_idx], 0)
 
         return torch.squeeze(f_interp.reshape(self.batch_size, len(new_x_axis),
                                               len(new_y_axis)))
@@ -72,11 +71,9 @@ class BilinearInterp:
         self.y_axis = y_axis
         self.field = field
 
-        # Get batch size
-        if len(field.shape) == 2:
-            self.batch_size = 1
-        else:
-            self.batch_size = field.shape[0]
+        if len(self.field.shape) == 2:
+            self.field = torch.unsqueeze(self.field, 0)
+        self.batch_size = field.shape[0]
 
     def __call__(self, new_x_axis: torch.Tensor, new_y_axis: torch.Tensor
                  ) -> torch.Tensor:
@@ -116,10 +113,10 @@ class BilinearInterp:
         y1 = self.y_axis[y_high]
 
         # Get the field values of the points to interpolate to
-        f00 = torch.where(interp_bool, self.field[..., x_low, y_low], 0)
-        f01 = torch.where(interp_bool,  self.field[..., x_low, y_high], 0)
-        f10 = torch.where(interp_bool,  self.field[..., x_high, y_low], 0)
-        f11 = torch.where(interp_bool, self.field[..., x_high, y_high], 0)
+        f00 = torch.where(interp_bool, self.field[:, x_low, y_low], 0)
+        f01 = torch.where(interp_bool, self.field[:, x_low, y_high], 0)
+        f10 = torch.where(interp_bool, self.field[:, x_high, y_low], 0)
+        f11 = torch.where(interp_bool, self.field[:, x_high, y_high], 0)
 
         # Calculate the interpolated field values
         f_interp = ((f00 * (x1 - x_samples) * (y1 - y_samples) +
