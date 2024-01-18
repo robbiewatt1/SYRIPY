@@ -168,6 +168,7 @@ class FieldContainer(torch.nn.Module):
         for element in self.field_array:
             element.switch_device(device)
 
+    @torch.jit.ignore
     def get_transport_matrix(self, start_z: float, end_z: float,
                              gamma: torch.Tensor ) -> torch.Tensor:
         """
