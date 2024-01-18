@@ -53,7 +53,7 @@ class FieldSolver(torch.nn.Module):
                   t_end: Optional[float] = None,
                   n_sample_x: Optional[float] = None,
                   n_sample_y: Optional[float] = None,
-                  flat_power: float = 0.25, mode: str = "nn") -> None:
+                  flat_power: float = 0.25, mode: str = "cubic") -> None:
         """
         Sets the track samples based on large values of objective function
         obj = |grad(1/grad(g))|. Where g(t) is the phase function. Takes sample

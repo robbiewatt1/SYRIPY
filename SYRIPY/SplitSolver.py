@@ -68,7 +68,7 @@ class SplitSolver(torch.nn.Module):
                   t_end: Optional[float] = None,
                   n_sample_x: Optional[float] = None,
                   n_sample_y: Optional[float] = None,
-                  flat_power: float = 0.25, mode: str = "nn",
+                  flat_power: float = 0.25, mode: str = "cubic",
                   plot_track: bool = False) -> None:
         """
         Calculates the split index of the track and sets the track samples
