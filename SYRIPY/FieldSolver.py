@@ -249,69 +249,6 @@ class FieldSolver(torch.nn.Module):
         """
         return self._solve_field(time, r, beta, gamma, solve_ends, solve_ends)
 
-    '''
-    @torch.jit.export
-    def solve_field_split(self, beam_index: int = -1, split_time: float = 0,
-                          plot_track: bool = False):
-        """
-        Splits the track into two parts at time index closest to split_time and
-        calculates a separate field for both parts of the track.
-        :param beam_index: Batch tensor of indices to be solved.
-         expansion to solve the ends of the integral.
-        :param split_time: Time when the track is split.
-        :param plot_track: Plots the split track to check time index is in the
-         right place.
-        :return: (wavefront_1, wavefront_2) with updated field array
-        """
-        if beam_index == -1:
-            if self.track.r.shape[0] == 0:
-                raise Exception(
-                    "Cannot calculate particle field because track hasn't "
-                    "been simulated yet. Please simulate track with "
-                    "track.sim_single_c() or track.sim_single() before trying "
-                    "to solve field.")
-            r = self.track.r
-            beta = self.track.beta
-            gamma = self.track.gamma
-        else:
-            if self.track.beam_r.shape[0] == 0:
-                raise Exception(
-                    "Cannot calculate beam sample field because beam tracks "
-                    "haven't been simulated yet. Please simulate beam track "
-                    "with  track.sim_beam_c() or track.sim_beam() before "
-                    "trying to solve field.")
-            r = self.track.beam_r[beam_index]
-            beta = self.track.beam_beta[beam_index]
-            gamma = self.track.beam_gamma[beam_index]
-
-        if split_time < self.track.time[0] or split_time > self.track.time[-1]:
-            raise Exception(
-                f"Split time: {split_time}, is outside the range of the track. "
-                f"i.e. min = {self.track.time[0]}, max = {self.track.time[-1]}."
-            )
-
-        split_index = torch.argmin(torch.abs(self.track.time - split_time))
-        if split_index % 2 == 0:
-            split_index += 1
-
-        wavefront_1 = copy.deepcopy(self._solve_field(
-            self.track.time[:split_index], r[:, :split_index],
-            beta[:, :split_index], gamma, True, False))
-        wavefront_2 = self._solve_field(
-            self.track.time[split_index-1:], r[:, split_index-1:],
-            beta[:, split_index-1:], gamma, False, True)
-
-        if plot_track:
-            fig, ax = plt.subplots()
-            ax.plot(r[2, :split_index].cpu().detach(),
-                    r[0, :split_index].cpu(), color="red")
-            ax.plot(r[2, split_index-1:].cpu().detach(),
-                    r[0, split_index-1:].cpu().detach(), color="blue")
-            return wavefront_1, wavefront_2, (fig, ax)
-        else:
-            return wavefront_1, wavefront_2
-    '''
-
     @torch.jit.export
     def _solve_field(self, time: torch.Tensor, r: torch.Tensor,
                      beta: torch.Tensor, gamma: torch.Tensor,

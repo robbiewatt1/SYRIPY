@@ -146,7 +146,7 @@ class Track(torch.nn.Module):
         """
         if beam_moments.shape[0] != 8:
             raise Exception("Beam moments must be of shape [8,]")
-        self.beam_params = beam_moments.to(self.device)
+        self.beam_params = beam_moments
         self.beam_matrix = torch.zeros((6, 6), device=self.device)
         self.beam_matrix[0, 0] = beam_moments[0]
         self.beam_matrix[0, 1] = beam_moments[1]
@@ -454,7 +454,6 @@ class Track(torch.nn.Module):
                 [self.beam_params[1], self.beam_params[2]]]))
         init_gamma = (1. + torch.sum(self.init_p0**2.) / self.c_light**2.)**0.5
         g_dist = Normal(loc=init_gamma, scale=self.beam_params[7]**0.5)
-        print(self.init_r0[0], self.beam_params, x_angle, n_part)
         x_sample = x_dist.sample((n_part,))
         y_sample = y_dist.sample((n_part,))
         beam_gamma = g_dist.sample((n_part,))
