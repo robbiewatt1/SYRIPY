@@ -1,10 +1,8 @@
-import matplotlib.pyplot as plt
 import torch
 from .Wavefront import Wavefront
 from .Tracking import Track
 from .Interpolation import CubicInterp
 from typing import Optional, Tuple
-import copy
 
 
 class FieldSolver(torch.nn.Module):

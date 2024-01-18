@@ -1,11 +1,8 @@
 import torch
-import torch.fft as fft
-from .FieldSolver import FieldSolver
-from .SplitSolver import SplitSolver
 from .Wavefront import Wavefront
 from .Tracking import Track
 from .Optics import OpticsContainer
-from typing import Optional, Dict
+from typing import Optional
 
 
 class BeamSolver:
@@ -15,76 +12,68 @@ class BeamSolver:
     """
 
     def __init__(self, wavefront: Wavefront, track: Track,
-                 optics: OpticsContainer = None, use_split_solver: bool = False,
-                 solver_args: Optional[Dict[str, int]] = None) -> None:
+                 optics: OpticsContainer = None) -> None:
         """
         :param wavefront: Instance of Wavefront class
         :param track: Instance of Track class (should already have calculated
-         single and bunch tracks)
+         single or bunch tracks)
         :param optics: Instance of OpticsContainer class.
-        :param solver_args: Dictionary of argument to set track samples, see
-         solver.set_track() for details.
         """
 
         self.track = track
         self.wavefront = wavefront
         self.optics = optics
 
-        # Solve for central track
-        if use_split_solver:
-            self.solver = SplitSolver(self.wavefront, self.track)
-            self.solver.set_dt(**solver_args)
-
-            wavefront1, wavefront2 = self.solver.solve_field()
-            if optics is not None:
-                self.optics.propagate(wavefront1)
-                self.optics.propagate(wavefront2)
-            wavefront1.add_field(wavefront2)
-            self.wavefront = wavefront1
-        else:
-            self.solver = FieldSolver(self.wavefront, self.track)
-            self.solver.set_dt(**solver_args)
-
-            wavefront = self.solver.solve_field()
-            if optics is not None:
-                self.optics.propagate(wavefront)
-            self.wavefront = wavefront
-
-    def convolve_beam(self) -> torch.Tensor:
+    def convolve_beam(self, sigma_x: torch.Tensor, sigma_y: torch.Tensor
+                      ) -> torch.Tensor:
         """
         Calculates the intensity of incoherent radiation from multiple electrons
         using a convolution method.
+        :param init_beam_params: Initial beam parameters [x, x-xp, xp, y, y-yp,
+            yp, z, gamma]**2
         :return: The intensity as a real 2d torch array
         """
+        '''
+        if init_beam_params is not None:
+            self.track.set_beam_params(init_beam_params)
 
         # First calculate blurring kernel
-        electron_transport = self.track.field_container.get_transport_matrix(
-            self.track.r[2, 0], self.wavefront.source_location[2],
-            self.track.gamma)
-        photon_transport = self.optics.get_propagation_matrix()
+        electron_transport = self.track.get_transport_matrix(
+            self.track.r[2, 0], self.wavefront.source_location[2])
+        photon_transport = self.optics.get_propagation_matrix().to(
+            self.track.device)
+
         transport = photon_transport @ electron_transport
         beam_matrix = self.track.get_beam_matrix()
         beam_matrix = transport @ beam_matrix @ transport.T
-        sigma_x, sigma_y = beam_matrix[0, 0]**0.5, beam_matrix[2, 2]**0.5
+        sigma_x, sigma_y = beam_matrix[0, 0]**0.5, beam_matrix[3, 3]**0.5
+        print(sigma_x, sigma_y)
+        '''
+        sigma_x, sigma_y = sigma_x.to(self.wavefront.device), sigma_y.to(
+            self.wavefront.device)
 
         # Now perform convolution
         intensity = self.wavefront.get_intensity()
 
         # Pad the wavefront to avoid edge effects
-        pad_size_x = int(5 * sigma_x / self.wavefront.delta[0])
-        pad_size_y = int(5 * sigma_y / self.wavefront.delta[1])
+        kernel_size_x = int(5 * sigma_x / self.wavefront.delta[0])
+        kernel_size_y = int(5 * sigma_y / self.wavefront.delta[1])
         intensity = torch.nn.functional.pad(
-            intensity, (pad_size_x, pad_size_x, pad_size_y, pad_size_y))
-        intensity_k = fft.fft2(fft.fftshift(intensity))
+            intensity, (kernel_size_y, kernel_size_y,
+                        kernel_size_x, kernel_size_x))
+        kernel_x_axis = torch.linspace(-5 * sigma_x.item(), 5 * sigma_x.item(),
+                              2 * kernel_size_x + 1,
+                                       device=self.wavefront.device)
+        kernel_y_axis = torch.linspace(-5 * sigma_y.item(), 5 * sigma_y.item(),
+                              2 * kernel_size_y + 1,
+                                       device=self.wavefront.device)
+        kernel = (torch.exp(-0.5 * (kernel_x_axis / sigma_x)**2.)[:, None]
+                  * torch.exp(-0.5 * (kernel_y_axis / sigma_y)**2.)[None, :])
+        intensity = torch.nn.functional.conv2d(
+            intensity[None, None, ...], kernel[None, None, ...]
+        )
+        return intensity[0, 0]
 
-        # Calculate the blurring kernel
-        fx = fft.fftfreq(self.wavefront.n_samples_xy[0],
-                         self.wavefront.delta[0], device=self.wavefront.device)
-        fy = fft.fftfreq(self.wavefront.n_samples_xy[1],
-                         self.wavefront.delta[1], device=self.wavefront.device)
-        fx, fy = torch.meshgrid(fx, fy, indexing="ij")
-        kernel = torch.exp(-(fx * sigma_x)**2. + (fy * sigma_y)**2.)
-        return fft.ifftshift(fft.ifft2(intensity_k * kernel)).real
 
     def monte_carlo_beam(self, n_part: Optional[int] = None, n_device: int = 1
                          ) -> torch.Tensor:
@@ -172,4 +161,5 @@ class BeamSolver:
         return intensity_total
         '''
         raise Exception("Monte Carlo solver hasn't been implemented yet")
+
 
