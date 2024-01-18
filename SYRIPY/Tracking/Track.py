@@ -196,7 +196,7 @@ class Track(torch.nn.Module):
         if self.field_container is None:
             raise TypeError("Field container value is None.")
 
-        if (self.init_r0 is None or self.init_p0 is None):
+        if self.init_r0 is None or self.init_p0 is None:
             raise TypeError("Initial parameters have not been set.")
 
         if time.shape[0] % 2 == 0:
@@ -589,6 +589,7 @@ class BeamAutograd(torch.autograd.Function):
         """
         return None, None, None
 
+
 def beam_func(beam_position: torch.Tensor, beam_momentum: torch.Tensor,
                 track: Track) -> Tuple[torch.Tensor, torch.Tensor]:
     """
@@ -600,40 +601,3 @@ def beam_func(beam_position: torch.Tensor, beam_momentum: torch.Tensor,
     """
     return TrackAutograd.apply(beam_position, beam_momentum, track)
 
-
-if __name__ == "__main__":
-    from Magnets import Dipole, FieldContainer
-    import time as timer
-
-
-    # Define the magnet setup
-    # Define the magnet setup
-    d0 = Dipole(torch.tensor([-0.1156, 0, 0]),      # Location (m)
-                0.203274830142196,                  # Length (m)
-                torch.tensor([0, 0.49051235, 0]),   # Field strength (T)
-                None,                               # Direction (not implimented yet)
-                0.05)                               # Edge length (m)
-    d1 = Dipole(torch.tensor([0, 0, 1.0334]), 0.203274830142196,
-                torch.tensor([0, -0.49051235, 0]), None, 0.05)
-    d2 = Dipole(torch.tensor([0, 0, 2.0668]), 0.203274830142196,
-                torch.tensor([0, -0.49051235, 0]), None, 0.05)
-    field = FieldContainer([d0, d1, d2])
-    r_init = torch.tensor([-0.0913563873, 0, -1], requires_grad=False)
-    p_init = torch.tensor([0, 0, 0.3 * 339.3 / 0.51099890221], requires_grad=False)
-
-    track = Track(field)
-    track.set_central_params(r_init, p_init)
-    track.set_beam_params(torch.tensor([0.0000001, 0, 0.0000001, 0.0000001, 0, 0.0000001, 0, 1]))
-    start = timer.time()
-    track.sim_beam_c(torch.linspace(0, 14, 501), 1000)
-    print(timer.time() - start)
-    #
-    #track.sim_beam(torch.linspace(0, 14, 1001), 100)
-    track.plot_beam([2, 0])
-    #track.plot_bunch([2, 0])
-    #plt.show()
-    ##x_samples, p_samples = track._sample_beam(10000)
-
-    #    fig, ax = plt.subplots()
-    #    ax.scatter(p_samples[:, 0], p_samples[:, 2])
-    plt.show()
