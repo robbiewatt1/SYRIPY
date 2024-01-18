@@ -105,7 +105,7 @@ class Track(torch.nn.Module):
                     self.beam_beta[:n_part, axes[1], :].cpu().detach().T)
         return fig, ax
 
-    @torch.jit.export
+    @torch.jit.ignore
     def switch_device(self, device: torch.device) -> "Track":
         """
         Changes the device that the class data is stored on.
