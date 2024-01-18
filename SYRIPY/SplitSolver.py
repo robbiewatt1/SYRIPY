@@ -28,9 +28,12 @@ class SplitSolver(torch.nn.Module):
         self.track = track
         self.blocks = blocks
         self.c_light = 0.299792458
-        self.split_index = None
-        self.wavefront_curve = None
-        self.source_location = None
+        self.split_index = 0
+        self.wavefront_curve = [torch.tensor([0.]),
+                                torch.tensor([0.])]
+        self.source_location = [torch.zeros(3), torch.zeros(3)]
+        self.wave1 = copy.deepcopy(self.wavefront)
+        self.wave2 = copy.deepcopy(self.wavefront)
 
         # Check that wavefront / track device are both the same
         if track.device != wavefront.device:
@@ -48,7 +51,7 @@ class SplitSolver(torch.nn.Module):
             (self.wavefront.wf_bounds[3] + self.wavefront.wf_bounds[2]) / 2,
             self.wavefront.z]
 
-    @torch.jit.export
+    @torch.jit.ignore
     def switch_device(self, device: torch.device) -> "SplitSolver":
         """
         Changes the device that the class data is stored on.
@@ -137,7 +140,6 @@ class SplitSolver(torch.nn.Module):
                       - (2. * r_obs[2] * rb_xy - r2_xy
                          * self.track.beta[2, None, t_0:t_1])
                       / (2 * r_obs[2] * r_obs[2] + r2_xy))
-
         grad_inv_grad = torch.gradient(1. / phase_grad, spacing=(
             self.track.time[t_0:t_1],), edge_order=1, dim=1)[0]
 
@@ -283,8 +285,8 @@ class SplitSolver(torch.nn.Module):
         """
 
         # Reset the wavefront
-        wavefront1 = copy.deepcopy(self.wavefront)
-        wavefront2 = copy.deepcopy(self.wavefront)
+        wavefront1 = self.wave1
+        wavefront2 = self.wave2
         wavefront1.reset()
         wavefront2.reset()
         wavefront1.curv_r = self.wavefront_curve[0]
@@ -326,8 +328,12 @@ class SplitSolver(torch.nn.Module):
                 phase, delta_phase, int2 / phase_grad, self.wavefront.omega,
                 self.split_index)
 
-            field1 = (real1_wf1 - real2_wf1 + 1j * (imag1_wf1 + imag2_wf1))
-            field2 = (real1_wf2 - real2_wf2 + 1j * (imag1_wf2 + imag2_wf2))
+            field1 = torch.view_as_complex(
+                torch.stack([real1_wf1 - real2_wf1, imag1_wf1 + imag2_wf1],
+                            dim=-1))
+            field2 = torch.view_as_complex(
+                torch.stack([real1_wf2 - real2_wf2, imag1_wf2 + imag2_wf2],
+                            dim=-1))
 
             # Solve end points to inf
             if solve_ends_l:

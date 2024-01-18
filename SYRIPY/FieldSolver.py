@@ -39,7 +39,7 @@ class FieldSolver(torch.nn.Module):
                             f"blocks. {self.wavefront.coords.shape[1]} "
                             f"observation points and {self.blocks} blocks.")
 
-    @torch.jit.export
+    @torch.jit.ignore
     def switch_device(self, device: torch.device) -> "FieldSolver":
         """
         Changes the device that the class data is stored on.
@@ -367,8 +367,8 @@ class FieldSolver(torch.nn.Module):
             real2, imag2 = self.filon_method(
                 phase, delta_phase, int2 / phase_grad, self.wavefront.omega)
 
-            field = (real1 - real2 + 1j * (imag1 + imag2))
-
+            field = torch.view_as_complex(
+                torch.stack([real1 - real2, imag1 + imag2], dim=-1))
             # Solve end points to inf
             if solve_ends_l:
                 f_l = int1[:, :, 0] + 1j * int2[:, :, 0]
