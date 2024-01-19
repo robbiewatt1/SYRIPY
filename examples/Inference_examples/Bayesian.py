@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 # inference. Pyro, Seaborn and Pandas are not part of the package requirements
 # and need to be installed separately.
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
 
 class ForwardModel:
@@ -47,21 +47,15 @@ class ForwardModel:
                          torch.tensor([0, -0.49051235, 0]), None, 0.05)
         self.field = FieldContainer([dipole0, dipole1, dipole2])
 
-        # Define a simple optics beamline with an aperture and a
-        # propagation to focus
-        self.optics = OpticsContainer([CircularAperture(0.02),
-                                       FraunhoferProp(1)])
-
-        # Set the known / initial assumption beam parameters for the simulation
-        self.time = torch.linspace(0, 18, 1001)
-        self.d0 = torch.tensor([-0, 0, 1.])
-        self.r0 = torch.tensor([-0.091386, 0, -1.00])
+        # Set the know central beam parameters for the simulation
+        self.time = torch.linspace(0, 18, 401)
         self.g0 = torch.tensor([339.3 / 0.51099890221])
+        self.r0 = torch.tensor([-0.091386, 0, -1.00])
+        self.d0 = torch.tensor([-0, 0, 1.])
 
         # Define the track / wavefront  / solver classes for the simulation
         self.track = Track(self.field, device=device)
-        print(self.track.device)
-        #self.track = torch.jit.script(self.track)
+        self.track = torch.jit.script(self.track)
         self.wavefront = Wavefront(3.086, 3.77e5,
                                    [-0.02, 0.02, -0.02, 0.02],
                                    [300, 1], device=device)
@@ -70,35 +64,32 @@ class ForwardModel:
         # Finally we wrap the solver function with torch.func.vmap, allowing the
         # calculation to be batched.
         def solver_func(index):
-            wvfrt = self.solver.solve_field_vmap(index, True)
+            wvfrt = self.solver.solve_field_vmap(index)
             return wvfrt.get_intensity()
         self.solver_func = torch.func.vmap(solver_func)
 
     def forward(self, size_x, div_x):
         """
         This represents a forward call to the model. In this tutorial we are
-        interested in inferring the direction and divergence of the beam in the
+        interested in inferring the size and divergence of the beam in the
         x-direction, so these are the two input parameters of this function.
-        :param dir_x: X direction of beam, i.e. the mean x-direction of
-         particles
-        :param div_x: X divergence of the beam, i.e. the standard deviation of
-         the x-direction of the particles
-        :return:
+        :param size_x: X size of beam
+        :param div_x: X divergence of the beam
+        :return: predicted intensity
         """
 
         # We start by generating the initial conditions for the beam. This
         # involves sampling from a standard normal and shifting / rescaling by
-        # dir_x and div_x respectively
+        # size_x and div_x respectively
         bunch_d = self.d0 + div_x * torch.tensor([1., 0., 0.]) * torch.randn(
             self.samples)[:, None]
+        bunch_p = bunch_d * self.g0 * 0.29979
         bunch_r = self.r0 + size_x * torch.tensor([1., 0., 0.]) * torch.randn(
             self.samples)[:, None]
-        bunch_g = torch.ones(self.samples) * self.g0
 
         # Now we simulate the tracks. Can't use the c++  version as gradients
         # are required
-        self.track.sim_beam(self.time, bunch_r=bunch_r, bunch_d=bunch_d,
-                            bunch_g=bunch_g)
+        self.track.sim_beam(self.time, beam_r=bunch_r, beam_p=bunch_p)
 
         # Now we down-sample the track so the field solver is faster
         self.solver.set_track(201, t_start=4, t_end=13)
@@ -127,7 +118,7 @@ def pryo_model(forward_model, measured_intensity=None):
     div = pyro.sample('Div', dist.Uniform(0, 1e-3))
     sigma = pyro.sample("Sigma", dist.Uniform(0.00, 0.003))
 
-    # Now call the forward model wiht the sample
+    # Now call the forward model with the sample
     predict = forward_model.forward(size, div).to("cpu")
     predict = predict / torch.trapz(predict)
 
@@ -141,16 +132,15 @@ if __name__ == "__main__":
     # First we will start by defining the forward model and generating some mock
     # experimental data.
 
-    # 500 macro-electrons seems to be enough and all fits on my GPU
-    forward_model = ForwardModel(500, 500)
+    # 1000 macro-electrons seems to be enough and all fits on my GPU
+    forward_model = ForwardModel(1000, 1000)
 
-    # Model a beam that is 1.2 mrad off axis with 300urad divergence and
-    # normalise
+    # Model a beam that with 500um size and 150urad divergence
     intensity = forward_model.forward(0.5e-3, 0.15e-3)
     intensity = intensity / torch.trapz(intensity)
 
     # Add some noise to the data
-    intensity = torch.normal(intensity, 0.001).to("cpu")
+    intensity = torch.normal(intensity, 0.0005).to("cpu")
 
     # Check what the mock data looks like
     fig, ax = plt.subplots(figsize=(4, 3))
@@ -166,7 +156,7 @@ if __name__ == "__main__":
     # function (ELBO which is a lower bound of the KL divergence).
     auto_guide = pyro.infer.autoguide.AutoMultivariateNormal(pryo_model)
     adam = pyro.optim.Adam({"lr": 0.04})
-    elbo = pyro.infer.Trace_ELBO()
+    elbo = pyro.infer.Trace_ELBO(num_particles=4)
     svi = pyro.infer.SVI(pryo_model, auto_guide, adam, elbo)
 
     # We now run the optimiser for some number of steps
