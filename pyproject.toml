@@ -1,8 +1,8 @@
 [build-system]
 requires = [
+    "pybind11>=2.10", 
     "setuptools",
     "wheel",
-    "pybind11",
     "cmake",
     "scikit-build",
     "torch"

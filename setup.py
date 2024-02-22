@@ -24,6 +24,4 @@ setup(
     install_requires=[
         'numpy',
         'matplotlib',
-        'torch'
-    ],
-)
+        'torch'])
